@@ -3,38 +3,33 @@
  */
 package play
 
-import sbt.{ Project => _, _ }
+import sbt._
 import sbt.Keys._
 
-import play.console.Colors
 import com.typesafe.sbt.SbtNativePackager.packageArchetype
+import com.typesafe.sbt.jse.SbtJsTask
+import com.typesafe.sbt.webdriver.SbtWebDriver
 
-object Project extends Plugin with PlayExceptions with play.Keys with PlayReloader with PlayCommands
-    with PlayRun with play.Settings with PlayPositionMapper with PlaySourceGenerators {
+/**
+ * Base plugin for Play projects. Declares common settings for both Java and Scala based Play projects.
+ */
+object Play
+  extends AutoPlugin
+  with PlayExceptions
+  with PlayReloader
+  with PlayCommands
+  with PlayRun
+  with play.PlaySettings
+  with PlayPositionMapper
+  with PlaySourceGenerators {
 
-  // ~~ Alerts  
-  if (Option(System.getProperty("play.debug.classpath")).filter(_ == "true").isDefined) {
-    println()
-    this.getClass.getClassLoader.asInstanceOf[sbt.PluginManagement.PluginClassLoader].getURLs.foreach { el =>
-      println(Colors.green(el.toString))
-    }
-    println()
-  }
+  override def requires = SbtJsTask && SbtWebDriver
 
-  Option(System.getProperty("play.version")).map {
-    case badVersion if badVersion != play.core.PlayVersion.current => {
-      println(
-        Colors.red("""
-          |This project uses Play %1$s while your Play installation uses %2$s!
-          |Update the Play sbt-plugin version to %2$s (usually in project/plugins.sbt) or install Play %1$s
-        """.stripMargin.format(play.core.PlayVersion.current, badVersion))
-      )
-    }
-    case _ =>
-  }
+  val autoImport = play.PlayImport
 
-  private lazy val commonSettings: Seq[Setting[_]] =
-    packageArchetype.java_application ++
+
+  override def projectSettings =
+    packageArchetype.java_server ++
       defaultSettings ++
       intellijCommandSettings ++
       Seq(testListeners += testListener) ++
@@ -42,31 +37,38 @@ object Project extends Plugin with PlayExceptions with play.Keys with PlayReload
         scalacOptions ++= Seq("-deprecation", "-unchecked", "-encoding", "utf8"),
         javacOptions in Compile ++= Seq("-encoding", "utf8", "-g")
       )
+}
 
-  lazy val playJavaSettings: Seq[Setting[_]] =
-    commonSettings ++
-      eclipseCommandSettings(JAVA) ++
-      defaultJavaSettings ++
-      Seq(libraryDependencies += javaCore)
+/**
+ * The main plugin for Play Java projects. To use this the plugin must be made available to your project
+ * via sbt's addPlugins mechanism e.g.:
+ * {{{
+ *   lazy val root = project.in(file(".")).addPlugins(PlayJava)
+ * }}}
+ */
+object PlayJava extends AutoPlugin {
+  override def requires = Play
 
-  lazy val playScalaSettings: Seq[Setting[_]] =
-    commonSettings ++
-      eclipseCommandSettings(SCALA) ++
-      defaultScalaSettings
+  import Play._
+  import Play.autoImport._
+  override def projectSettings =
+    eclipseCommandSettings(JAVA) ++
+    defaultJavaSettings ++
+    Seq(libraryDependencies += javaCore)
+}
 
-  // Provided for backward compatibility because we now prefer sbt settings to be used directly.
-  // FIXME: Deprecate this method in the future.
-  def apply(name: String, applicationVersion: String = "1.0", dependencies: Seq[ModuleID] = Nil, path: File = file("."), settings: => Seq[Setting[_]] = Seq()): sbt.Project = {
-    lazy val playSettings = if (dependencies.contains(javaCore)) playJavaSettings else playScalaSettings
+/**
+ * The main plugin for Play Scala projects. To use this the plugin must be made available to your project
+ * via sbt's addPlugins mechanism e.g.:
+ * {{{
+ *   lazy val root = project.in(file(".")).addPlugins(PlayScala)
+ * }}}
+ */
+object PlayScala extends AutoPlugin {
+  override def requires = Play
 
-    lazy val projectSettings: Seq[Setting[_]] = Seq(
-      version := applicationVersion,
-      libraryDependencies ++= dependencies
-    )
-
-    sbt.Project(name, path)
-      .settings(playSettings: _*)
-      .settings(projectSettings: _*)
-      .settings(settings: _*)
-  }
+  import Play._
+  override def projectSettings =
+    eclipseCommandSettings(SCALA) ++
+    defaultScalaSettings
 }

@@ -3,16 +3,22 @@
  */
 package play
 
-import sbt.{ Project => SbtProject, Settings => SbtSettings, _ }
+import sbt._
 import sbt.Keys._
+import play.PlayImport._
+import PlayKeys._
 
-import play.console.Colors
+import com.typesafe.sbt.web.SbtWeb.autoImport._
+
+import play.sbtplugin.Colors
 
 import Keys._
 import java.lang.{ ProcessBuilder => JProcessBuilder }
 import sbt.complete.Parsers._
 
 import scala.util.control.NonFatal
+import sbt.inc.{ Analysis, Stamp, Exists, Hash, LastModified }
+import sbt.compiler.AggressiveCompile
 
 trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternalKeys {
   this: PlayReloader =>
@@ -22,30 +28,6 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
   val JAVA = "java"
   val SCALA = "scala"
   val NONE = "none"
-
-  val playCopyAssets = TaskKey[Seq[(File, File)]]("play-copy-assets")
-  val playCopyAssetsTask = (baseDirectory, managedResources in Compile, resourceManaged in Compile, playAssetsDirectories, playExternalAssets, classDirectory in Compile, cacheDirectory, streams, state) map { (b, resources, resourcesDirectories, r, externals, t, c, s, state) =>
-    val cacheFile = c / "copy-assets"
-
-    val mappings = (r.map(d => (d ***) --- (d ** HiddenFileFilter ***)).foldLeft(PathFinder.empty)(_ +++ _).filter(_.isFile) x relativeTo(b +: r.filterNot(_.getAbsolutePath.startsWith(b.getAbsolutePath))) map {
-      case (origin, name) => (origin, new java.io.File(t, name))
-    }) ++ (resources x rebase(resourcesDirectories, t))
-
-    val externalMappings = externals.map {
-      case (root, paths, common) => {
-        paths(root) x relativeTo(root :: Nil) map {
-          case (origin, name) => (origin, new java.io.File(t, common + "/" + name))
-        }
-      }
-    }.foldLeft(Seq.empty[(java.io.File, java.io.File)])(_ ++ _)
-
-    val assetsMapping = mappings ++ externalMappings
-
-    s.log.debug("Copy play resource mappings: " + assetsMapping.mkString("\n\t", "\n\t", ""))
-
-    Sync(cacheFile)(assetsMapping)
-    assetsMapping
-  }
 
   //- test reporter
   protected lazy val testListener = new PlayTestListener
@@ -59,9 +41,7 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
     testListener.result.clear
   }
 
-  val playReloadTask = (playCopyAssets, playCompileEverything) map { (_, analysises) =>
-    analysises.reduceLeft(_ ++ _)
-  }
+  val playReloadTask = Def.task(playCompileEverything.value.reduceLeft(_ ++ _))
 
   def intellijCommandSettings = {
     import org.sbtidea.SbtIdeaPlugin
@@ -80,7 +60,7 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
     SbtIdeaPlugin.settings ++ Seq(
       commands += Command("idea")(_ => args) { (state, args) =>
         // Firstly, attempt to compile the project, but ignore the result
-        SbtProject.runTask(compile in Compile, state)
+        Project.runTask(compile in Compile, state)
 
         SbtIdeaPlugin.doCommand(state, if (!args.contains(WithSources) && !(args.contains(NoSources) || args.contains(NoClassifiers))) {
           args :+ NoClassifiers
@@ -93,7 +73,7 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
 
   // ----- Post compile (need to be refactored and fully configurable)
 
-  def PostCompile(scope: Configuration) = (sourceDirectory in scope, dependencyClasspath in scope, compile in scope, javaSource in scope, sourceManaged in scope, classDirectory in scope, cacheDirectory in scope) map { (src, deps, analysis, javaSrc, srcManaged, classes, cacheDir) =>
+  def PostCompile(scope: Configuration) = (sourceDirectory in scope, dependencyClasspath in scope, compile in scope, javaSource in scope, sourceManaged in scope, classDirectory in scope, cacheDirectory in scope, compileInputs in compile in scope) map { (src, deps, analysis, javaSrc, srcManaged, classes, cacheDir, inputs) =>
 
     val classpath = (deps.map(_.data.getAbsolutePath).toArray :+ classes.getAbsolutePath).mkString(java.io.File.pathSeparator)
 
@@ -113,14 +93,21 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
         Nil
     }
 
-    javaClasses.foreach(play.core.enhancers.PropertiesEnhancer.generateAccessors(classpath, _))
-    javaClasses.foreach(play.core.enhancers.PropertiesEnhancer.rewriteAccess(classpath, _))
-    templateClasses.foreach(play.core.enhancers.PropertiesEnhancer.rewriteAccess(classpath, _))
+    import play.core.enhancers.PropertiesEnhancer
+
+    val javaClassesWithGeneratedAccessors = javaClasses.filter(PropertiesEnhancer.generateAccessors(classpath, _))
+    val javaClassesWithAccessorsRewritten = javaClasses.filter(PropertiesEnhancer.rewriteAccess(classpath, _))
+    val enhancedTemplateClasses = templateClasses.filter(PropertiesEnhancer.rewriteAccess(classpath, _))
+
+    val enhancedClasses = (javaClassesWithGeneratedAccessors ++ javaClassesWithAccessorsRewritten ++
+      enhancedTemplateClasses).distinct
 
     IO.write(timestampFile, System.currentTimeMillis.toString)
 
+    val ebeanEnhancement = classpath.contains("play-java-ebean")
+
     // EBean
-    if (classpath.contains("play-java-ebean")) {
+    if (ebeanEnhancement) {
 
       val originalContextClassLoader = Thread.currentThread.getContextClassLoader
 
@@ -163,6 +150,7 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
       }
     }
     // Copy managed classes - only needed in Compile scope
+    // This is done to ease integration with Eclipse, but it's doubtful as to how effective it is.
     if (scope.name.toLowerCase == "compile") {
       val managedClassesDirectory = classes.getParentFile / (classes.getName + "_managed")
 
@@ -176,14 +164,62 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
       // Remove deleted class files
       (managedClassesDirectory ** "*.class").get.filterNot(managedSet.contains(_)).foreach(_.delete())
     }
-    analysis
+
+    // If ebean enhancement was done, then it's possible that any of the java classes were enhanced, we don't know
+    // which, otherwise it's just the enhanced classes that we did accessor generation/rewriting for
+    val possiblyEnhancedClasses = if (ebeanEnhancement) {
+      javaClasses ++ enhancedTemplateClasses
+    } else {
+      enhancedClasses
+    }
+
+    if (!possiblyEnhancedClasses.isEmpty) {
+      /**
+       * Updates stamp of product (class file) by preserving the type of a passed stamp.
+       * This way any stamp incremental compiler chooses to use to mark class files will
+       * be supported.
+       */
+      def updateStampForClassFile(classFile: File, stamp: Stamp): Stamp = stamp match {
+        case _: Exists => Stamp.exists(classFile)
+        case _: LastModified => Stamp.lastModified(classFile)
+        case _: Hash => Stamp.hash(classFile)
+      }
+      // Since we may have modified some of the products of the incremental compiler, that is, the compiled template
+      // classes and compiled Java sources, we need to update their timestamps in the incremental compiler, otherwise
+      // the incremental compiler will see that they've changed since it last compiled them, and recompile them.
+      val updatedAnalysis = analysis.copy(stamps = possiblyEnhancedClasses.foldLeft(analysis.stamps) { (stamps, classFile) =>
+        val existingStamp = stamps.product(classFile)
+        if (existingStamp == Stamp.notPresent) {
+          throw new java.io.IOException("Tried to update a stamp for class file that is not recorded as "
+            + s"product of incremental compiler: $classFile")
+        }
+        stamps.markProduct(classFile, updateStampForClassFile(classFile, existingStamp))
+      })
+
+      // Need to persist the updated analysis.
+      val agg = new AggressiveCompile(inputs.incSetup.cacheFile)
+      // Load the old one. We do this so that we can get a copy of CompileSetup, which is the cache compiler
+      // configuration used to determine when everything should be invalidated. We could calculate it ourselves, but
+      // that would by a heck of a lot of fragile code due to the vast number of things we would have to depend on.
+      // Reading it out of the existing file is good enough.
+      val existing: Option[(Analysis, CompileSetup)] = agg.store.get()
+      // Since we've just done a compile before this task, this should never return None, so don't worry about what to
+      // do when it returns None.
+      existing.foreach {
+        case (_, compileSetup) => agg.store.set(updatedAnalysis, compileSetup)
+      }
+
+      updatedAnalysis
+    } else {
+      analysis
+    }
   }
 
   // ----- Play prompt
 
   val playPrompt = { state: State =>
 
-    val extracted = SbtProject.extract(state)
+    val extracted = Project.extract(state)
     import extracted._
 
     (name in currentRef get structure.data).map { name =>
@@ -208,14 +244,14 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
   }
 
   // -- Utility methods for 0.10-> 0.11 migration
-  def inAllDeps[T](base: ProjectRef, deps: ProjectRef => Seq[ProjectRef], key: SettingKey[T], data: SbtSettings[Scope]): Seq[T] =
+  def inAllDeps[T](base: ProjectRef, deps: ProjectRef => Seq[ProjectRef], key: SettingKey[T], data: Settings[Scope]): Seq[T] =
     inAllProjects(Dag.topologicalSort(base)(deps), key, data)
-  def inAllProjects[T](allProjects: Seq[Reference], key: SettingKey[T], data: SbtSettings[Scope]): Seq[T] =
+  def inAllProjects[T](allProjects: Seq[Reference], key: SettingKey[T], data: Settings[Scope]): Seq[T] =
     allProjects.flatMap { p => key in p get data }
 
   def inAllDependencies[T](base: ProjectRef, key: SettingKey[T], structure: Load.BuildStructure): Seq[T] = {
     def deps(ref: ProjectRef): Seq[ProjectRef] =
-      SbtProject.getProject(ref, structure).toList.flatMap { p =>
+      Project.getProject(ref, structure).toList.flatMap { p =>
         p.dependencies.map(_.project) ++ p.aggregate
       }
     inAllDeps(base, deps, key, structure.data)
@@ -238,7 +274,7 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
   }
 
   val playCompileEverythingTask = (state, thisProjectRef) flatMap { (s, r) =>
-    inAllDependencies(r, (compile in Compile).task, SbtProject structure s).join
+    inAllDependencies(r, playAssetsWithCompilation.task, Project structure s).join
   }
 
   val buildRequireTask = (copyResources in Compile, crossTarget, requireJs, requireJsFolder, requireJsShim, requireNativePath, streams) map { (cr, crossTarget, requireJs, requireJsFolder, requireJsShim, requireNativePath, s) =>
@@ -281,53 +317,9 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
     cr
   }
 
-  val playCommand = Command.command("play", Help("play", ("play", "Enter the play console"), "Welcome to Play " + play.core.PlayVersion.current + """!
-        |
-        |These commands are available:
-        |-----------------------------
-        |classpath                  Display the project classpath.
-        |clean                      Clean all generated files.
-        |compile                    Compile the current application.
-        |console                    Launch the interactive Scala console (use :quit to exit).
-        |dependencies               Display the dependencies summary.
-        |dist                       Construct standalone application package.
-        |exit                       Exit the console.
-        |h2-browser                 Launch the H2 Web browser.
-        |license                    Display licensing informations.
-        |package                    Package your application as a JAR.
-        |play-version               Display the Play version.
-        |publish                    Publish your application in a remote repository.
-        |publish-local              Publish your application in the local repository.
-        |reload                     Reload the current application build file.
-        |run <port>                 Run the current application in DEV mode.
-        |test                       Run Junit tests and/or Specs from the command line
-        |eclipse                    generate eclipse project file
-        |idea                       generate Intellij IDEA project file
-        |sh <command to run>        execute a shell command 
-        |start <port>               Start the current application in another JVM in PROD mode.
-        |update                     Update application dependencies.
-        |
-        |Type `help` to get the standard sbt help.
-        |""".stripMargin)) { state: State =>
-
-    val extracted = SbtProject.extract(state)
-    import extracted._
-
-    // Display logo
-    println(play.console.Console.logo)
-    println("""
-            |> Type "help play" or "license" for more information.
-            |> Type "exit" or use Ctrl+D to leave this console.
-            |""".stripMargin)
-
-    state.copy(
-      remainingCommands = state.remainingCommands :+ "shell")
-
-  }
-
   val h2Command = Command.command("h2-browser") { state: State =>
     try {
-      val commonLoader = SbtProject.runTask(playCommonClassloader, state).get._2.toEither.right.get
+      val commonLoader = Project.runTask(playCommonClassloader, state).get._2.toEither.right.get
       val h2ServerClass = commonLoader.loadClass(classOf[org.h2.tools.Server].getName)
       h2ServerClass.getMethod("main", classOf[Array[String]]).invoke(null, Array.empty[String])
     } catch {
@@ -360,9 +352,9 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
 
   val classpathCommand = Command.command("classpath") { state: State =>
 
-    val extracted = SbtProject.extract(state)
+    val extracted = Project.extract(state)
 
-    SbtProject.runTask(dependencyClasspath in Runtime, state).get._2.toEither match {
+    Project.runTask(dependencyClasspath in Runtime, state).get._2.toEither match {
       case Left(_) => {
         println()
         println("Cannot compute the classpath")
@@ -385,10 +377,11 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
 
   val playMonitoredFiles = TaskKey[Seq[String]]("play-monitored-files")
   val playMonitoredFilesTask = (thisProjectRef, state) map { (ref, state) =>
-    val src = inAllDependencies(ref, sourceDirectories in Compile, SbtProject structure state).foldLeft(Seq.empty[File])(_ ++ _)
-    val resources = inAllDependencies(ref, resourceDirectories in Compile, SbtProject structure state).foldLeft(Seq.empty[File])(_ ++ _)
-    val assets = inAllDependencies(ref, playAssetsDirectories, SbtProject structure state).foldLeft(Seq.empty[File])(_ ++ _)
-    (src ++ resources ++ assets).map { f =>
+    val src = inAllDependencies(ref, sourceDirectories in Compile, Project structure state).foldLeft(Seq.empty[File])(_ ++ _)
+    val resources = inAllDependencies(ref, resourceDirectories in Compile, Project structure state).foldLeft(Seq.empty[File])(_ ++ _)
+    val assets = inAllDependencies(ref, sourceDirectories in Assets, Project structure state).foldLeft(Seq.empty[File])(_ ++ _)
+    val public = inAllDependencies(ref, resourceDirectories in Assets, Project structure state).foldLeft(Seq.empty[File])(_ ++ _)
+    (src ++ resources ++ assets ++ public).map { f =>
       if (!f.exists) f.mkdirs(); f
     }.map(_.getCanonicalPath).distinct
   }
@@ -426,9 +419,9 @@ trait PlayCommands extends PlayAssetsCompiler with PlayEclipse with PlayInternal
 
   val computeDependenciesCommand = Command.command("dependencies") { state: State =>
 
-    val extracted = SbtProject.extract(state)
+    val extracted = Project.extract(state)
 
-    SbtProject.runTask(computeDependencies, state).get._2.toEither match {
+    Project.runTask(computeDependencies, state).get._2.toEither match {
       case Left(_) => {
         println()
         println("Cannot compute dependencies")

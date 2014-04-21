@@ -96,6 +96,27 @@ object JsonValidSpec extends Specification {
       )
     }
 
+    "validate JsArray of stream to List" in {
+      JsArray(Stream("alpha", "beta", "delta") map JsString.apply).validate[List[String]] must equalTo(JsSuccess(List("alpha", "beta", "delta")))
+    }
+
+    "invalidate JsArray of stream to List with wrong type conversion" in {
+      JsArray(Stream(JsNumber(1), JsString("beta"), JsString("delta"), JsNumber(4), JsString("five"))).validate[List[Int]] must equalTo(
+        JsError(Seq(
+          JsPath(1) -> Seq(ValidationError("error.expected.jsnumber")),
+          JsPath(2) -> Seq(ValidationError("error.expected.jsnumber")),
+          JsPath(4) -> Seq(ValidationError("error.expected.jsnumber"))
+        ))
+      )
+
+      JsArray(Stream(JsString("alpha"), JsNumber(5), JsBoolean(true))).validate[List[Int]] must equalTo(
+        JsError(Seq(
+          JsPath(0) -> Seq(ValidationError("error.expected.jsnumber")),
+          JsPath(2) -> Seq(ValidationError("error.expected.jsnumber"))
+        ))
+      )
+    }
+
     "validate Dates" in {
       val d = new java.util.Date()
       val df = new java.text.SimpleDateFormat("yyyy-MM-dd")
@@ -137,6 +158,24 @@ object JsonValidSpec extends Specification {
         )
       )
       js.validate[java.util.Date](Reads.IsoDateReads) must beEqualTo(JsSuccess(c.getTime))*/
+    }
+
+    "validate UUID" in {
+      "validate correct UUIDs" in {
+        val uuid = java.util.UUID.randomUUID()
+        Json.toJson[java.util.UUID](uuid).validate[java.util.UUID] must beEqualTo(JsSuccess(uuid))
+      }
+
+      "reject malformed UUIDs" in {
+        JsString("bogus string").validate[java.util.UUID].recoverTotal {
+          e => "error"
+        } must beEqualTo("error")
+      }
+      "reject well-formed but incorrect UUIDS in strict mode" in {
+        JsString("0-0-0-0-0").validate[java.util.UUID](Reads.uuidReader(true)).recoverTotal {
+          e => "error"
+        } must beEqualTo("error")
+      }
     }
 
     "Can reads with nullable" in {

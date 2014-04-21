@@ -6,8 +6,10 @@ package play
 import scala.util.control.NonFatal
 import play.api._
 import play.core._
-import sbt.{ Project => SbtProject, _ }
+import sbt._
 import sbt.Keys._
+import play.PlayImport._
+import PlayKeys._
 import PlayExceptions._
 
 trait PlayReloader {
@@ -17,9 +19,9 @@ trait PlayReloader {
 
   def newReloader(state: State, playReload: TaskKey[sbt.inc.Analysis], createClassLoader: ClassLoaderCreator, classpathTask: TaskKey[Classpath], baseLoader: ClassLoader) = {
 
-    val extracted = SbtProject.extract(state)
+    val extracted = Project.extract(state)
 
-    new SBTLink {
+    new BuildLink {
 
       lazy val projectPath = extracted.currentProject.base
 
@@ -103,7 +105,7 @@ trait PlayReloader {
         } catch {
           case NonFatal(e) => {
 
-            println(play.console.Colors.red(
+            println(play.sbtplugin.Colors.red(
               """|
                  |Cannot load the JNotify native library (%s)
                  |Play will check file changes for each request, so expect degraded reloading performace.
@@ -149,7 +151,7 @@ trait PlayReloader {
 
       lazy val settings = {
         import scala.collection.JavaConverters._
-        extracted.get(Keys.devSettings).toMap.asJava
+        extracted.get(devSettings).toMap.asJava
       }
 
       // ---
@@ -241,7 +243,7 @@ trait PlayReloader {
             val JavacErrorInfo = """\[error\]\s*([a-z ]+):(.*)""".r
             val JavacErrorPosition = """\[error\](\s*)\^\s*""".r
 
-            SbtProject.runTask(streamsManager, state).map(_._2).get.toEither.right.toOption.map { streamsManager =>
+            Project.runTask(streamsManager, state).map(_._2).get.toEither.right.toOption.map { streamsManager =>
               var first: (Option[(String, String, String)], Option[Int]) = (None, None)
               var parsed: (Option[(String, String, String)], Option[Int]) = (None, None)
               Output.lastLines(i.node.get.asInstanceOf[ScopedKey[_]], streamsManager).map(_.replace(scala.Console.RESET, "")).map(_.replace(scala.Console.RED, "")).collect {
@@ -280,61 +282,57 @@ trait PlayReloader {
 
       private val classLoaderVersion = new java.util.concurrent.atomic.AtomicInteger(0)
 
-      private def newClassLoader = {
+      private def taskFailureHandler(incomplete: Incomplete): Exception = {
+        jnotify.changed()
+        Incomplete.allExceptions(incomplete).headOption.map {
+          case e: PlayException => e
+          case e: xsbti.CompileFailed => {
+            getProblems(incomplete)
+              .find(_.severity == xsbti.Severity.Error)
+              .map(CompilationException)
+              .getOrElse(UnexpectedException(Some("The compilation failed without reporting any problem!"), Some(e)))
+          }
+          case e: Exception => UnexpectedException(unexpected = Some(e))
+        }.getOrElse {
+          UnexpectedException(Some("The compilation task failed without any exception!"))
+        }
+      }
+
+      private def newClassLoader: Either[Exception, ClassLoader] = {
         val version = classLoaderVersion.incrementAndGet
         val name = "ReloadableClassLoader(v" + version + ")"
-        val classpath = SbtProject.runTask(classpathTask, state).map(_._2).get.toEither.right.get
-        val urls = Path.toURLs(classpath.files)
-        val loader = createClassLoader(name, urls, baseLoader)
-        currentApplicationClassLoader = Some(loader)
-        loader
+        Project.runTask(classpathTask, state).map(_._2).get.toEither
+          .left.map(taskFailureHandler)
+          .right.map {
+            classpath =>
+              val urls = Path.toURLs(classpath.files)
+              val loader = createClassLoader(name, urls, baseLoader)
+              currentApplicationClassLoader = Some(loader)
+              loader
+          }
       }
 
       def reload: AnyRef = {
-
-        play.Project.synchronized {
-
+        play.Play.synchronized {
           if (jnotify.hasChanged || hasChangedFiles) {
             jnotify.reloaded()
-            SbtProject.runTask(playReload, state).map(_._2).get.toEither
-              .left.map { incomplete =>
-                jnotify.changed()
-                Incomplete.allExceptions(incomplete).headOption.map {
-                  case e: PlayException => e
-                  case e: xsbti.CompileFailed => {
-                    getProblems(incomplete)
-                      .filter(_.severity == xsbti.Severity.Error)
-                      .headOption
-                      .map(CompilationException(_))
-                      .getOrElse {
-                        UnexpectedException(Some("The compilation failed without reporting any problem!"), Some(e))
-                      }
-                  }
-                  case e: Exception => UnexpectedException(unexpected = Some(e))
-                }.getOrElse {
-                  UnexpectedException(Some("The compilation task failed without any exception!"))
-                }
-              }
-              .right.map { compilationResult =>
-                updateAnalysis(compilationResult).map { _ =>
-                  newClassLoader
-                }
-              }.fold(
-                oops => oops,
-                maybeClassloader => maybeClassloader.getOrElse(null)
-              )
+            Project.runTask(playReload, state).map(_._2).get.toEither
+              .left.map(taskFailureHandler)
+              .right.map {
+                compilationResult =>
+                  updateAnalysis(compilationResult)
+                  newClassLoader.fold(identity, identity)
+              }.fold(identity, identity)
           } else {
             null
           }
-
         }
-
       }
 
       def runTask(task: String): AnyRef = {
         val parser = Act.scopedKeyParser(state)
         val Right(sk) = complete.DefaultParsers.result(parser, task)
-        val result = SbtProject.runTask(sk.asInstanceOf[Def.ScopedKey[Task[AnyRef]]], state).map(_._2)
+        val result = Project.runTask(sk.asInstanceOf[Def.ScopedKey[Task[AnyRef]]], state).map(_._2)
 
         result.flatMap(_.toEither.right.toOption).getOrElse(null)
       }

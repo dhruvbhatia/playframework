@@ -14,7 +14,7 @@ import scala.io.Source
 
 object JavascriptCompiler {
 
-  import com.google.javascript.jscomp.{ Compiler, CompilerOptions, JSSourceFile, CompilationLevel }
+  import com.google.javascript.jscomp.{ Compiler, CompilerOptions, SourceFile, CompilationLevel }
 
   /**
    * Compile a JS file with its dependencies
@@ -27,23 +27,27 @@ object JavascriptCompiler {
     import scala.util.control.Exception._
 
     val requireJsMode = simpleCompilerOptions.contains("rjs")
+    val commonJsMode = simpleCompilerOptions.contains("commonJs") && !requireJsMode
 
     val origin = Path(source).string
 
     val options = fullCompilerOptions.getOrElse {
       val defaultOptions = new CompilerOptions()
       defaultOptions.closurePass = true
+
+      if (commonJsMode) {
+        defaultOptions.setProcessCommonJSModules(true)
+        // The compiler always expects forward slashes even on Windows.
+        defaultOptions.setCommonJSModulePathPrefix((source.getParent() + File.separator).replaceAll("\\\\", "/"))
+        defaultOptions.setManageClosureDependencies(Seq(toModuleName(source.getName())).asJava)
+      }
+
       simpleCompilerOptions.foreach(_ match {
         case "advancedOptimizations" => CompilationLevel.ADVANCED_OPTIMIZATIONS.setOptionsForCompilationLevel(defaultOptions)
         case "checkCaja" => defaultOptions.setCheckCaja(true)
         case "checkControlStructures" => defaultOptions.setCheckControlStructures(true)
         case "checkTypes" => defaultOptions.setCheckTypes(true)
         case "checkSymbols" => defaultOptions.setCheckSymbols(true)
-        case "commonJs" if !requireJsMode =>
-          defaultOptions.setProcessCommonJSModules(true)
-          // The compiler always expects forward slashes even on Windows.
-          defaultOptions.setCommonJSModulePathPrefix((source.getParent() + File.separator).replaceAll("\\\\", "/"))
-          defaultOptions.setManageClosureDependencies(Seq(toModuleName(source.getName())).asJava)
         case "ecmascript5" => defaultOptions.setLanguageIn(CompilerOptions.LanguageMode.ECMASCRIPT5)
         case _ => Unit // Unknown option
       })
@@ -52,9 +56,11 @@ object JavascriptCompiler {
 
     val compiler = new Compiler()
     lazy val all = allSiblings(source)
-    val input = if (!requireJsMode) all.map(f => JSSourceFile.fromFile(f)).toArray else Array(JSSourceFile.fromFile(source))
+    // In commonJsMode, we use all JavaScript sources in the same directory for some reason.
+    // Otherwise, we only look at the current file.
+    val input = if (commonJsMode) all.map(f => SourceFile.fromFile(f)).toList else List(SourceFile.fromFile(source))
 
-    catching(classOf[Exception]).either(compiler.compile(Array[JSSourceFile](), input, options).success) match {
+    catching(classOf[Exception]).either(compiler.compile(List[SourceFile]().asJava, input.asJava, options).success) match {
       case Right(true) => (origin, { if (!requireJsMode) Some(compiler.toSource()) else None }, Nil)
       case Right(false) => {
         val error = compiler.getErrors().head
@@ -75,9 +81,9 @@ object JavascriptCompiler {
     val compiler = new Compiler()
     val options = new CompilerOptions()
 
-    val input = Array[JSSourceFile](JSSourceFile.fromCode(name.getOrElse("unknown"), source))
+    val input = List[SourceFile](SourceFile.fromCode(name.getOrElse("unknown"), source))
 
-    compiler.compile(Array[JSSourceFile](), input, options).success match {
+    compiler.compile(List[SourceFile]().asJava, input.asJava, options).success match {
       case true => compiler.toSource()
       case false => {
         val error = compiler.getErrors().head
@@ -128,7 +134,7 @@ object JavascriptCompiler {
     val scope = ctx.initStandardObjects(global)
     val writer = new java.io.StringWriter()
     try {
-      val defineArguments = """arguments = ['-o', '""" + source.getAbsolutePath + "']"
+      val defineArguments = """arguments = ['-o', '""" + source.getAbsolutePath.replace(File.separatorChar, '/') + "']"
       ctx.evaluateString(scope, defineArguments, null,
         1, null)
       val r = ctx.evaluateReader(scope, new InputStreamReader(

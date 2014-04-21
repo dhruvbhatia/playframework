@@ -12,6 +12,8 @@ import java.security.cert.X509Certificate
 import java.io.{ File, FileInputStream, FileOutputStream }
 import javax.net.ssl.KeyManagerFactory
 import scala.util.control.NonFatal
+import scala.util.Properties.isJavaAtLeast
+import scala.util.{ Failure, Success, Try }
 
 /**
  * A fake key store
@@ -20,7 +22,7 @@ object FakeKeyStore {
   val GeneratedKeyStore = "conf/generated.keystore"
   val DnName = "CN=localhost, OU=Unit Testing, O=Mavericks, L=Moon Base 1, ST=Cyberspace, C=CY"
 
-  def keyManagerFactory(appPath: File): Option[KeyManagerFactory] = {
+  def keyManagerFactory(appPath: File): Try[KeyManagerFactory] = {
     try {
       val keyStore = KeyStore.getInstance("JKS")
       val keyStoreFile = new File(appPath, GeneratedKeyStore)
@@ -39,6 +41,7 @@ object FakeKeyStore {
         // Create the key store, first set the store pass
         keyStore.load(null, "".toCharArray)
         keyStore.setKeyEntry("playgenerated", keyPair.getPrivate, "".toCharArray, Array(cert))
+        keyStore.setCertificateEntry("playgeneratedtrusted", cert)
         for (out <- resource.managed(new FileOutputStream(keyStoreFile))) { keyStore.store(out, "".toCharArray) }
       } else {
         for (in <- resource.managed(new FileInputStream(keyStoreFile))) { keyStore.load(in, "".toCharArray) }
@@ -47,11 +50,10 @@ object FakeKeyStore {
       // Load the key and certificate into a key manager factory
       val kmf = KeyManagerFactory.getInstance("SunX509")
       kmf.init(keyStore, "".toCharArray)
-      Some(kmf)
+      Success(kmf)
     } catch {
       case NonFatal(e) => {
-        Play.logger.error("Error loading fake key store", e)
-        None
+        Failure(new Exception("Error loading fake key store", e))
       }
     }
   }
@@ -70,9 +72,12 @@ object FakeKeyStore {
     certInfo.set(X509CertInfo.VALIDITY, validity)
 
     // Subject and issuer
+    // Note: CertificateSubjectName and CertificateIssuerName are removed in Java 8
+    // and when setting the subject or issuer just the X500Name should be used.
     val owner = new X500Name(DnName)
-    certInfo.set(X509CertInfo.SUBJECT, new CertificateSubjectName(owner))
-    certInfo.set(X509CertInfo.ISSUER, new CertificateIssuerName(owner))
+    val justName = isJavaAtLeast("1.8")
+    certInfo.set(X509CertInfo.SUBJECT, if (justName) owner else new CertificateSubjectName(owner))
+    certInfo.set(X509CertInfo.ISSUER, if (justName) owner else new CertificateIssuerName(owner))
 
     // Key and algorithm
     certInfo.set(X509CertInfo.KEY, new CertificateX509Key(keyPair.getPublic))

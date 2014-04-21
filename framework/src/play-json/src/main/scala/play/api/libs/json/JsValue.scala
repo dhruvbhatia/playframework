@@ -87,8 +87,7 @@ sealed trait JsValue {
 }
 
 /**
- * Represent a Json null value.
- * with Scala 2.10-M7, this code generates WARNING : https://issues.scala-lang.org/browse/SI-6513
+ * Represents a Json null value.
  */
 case object JsNull extends JsValue
 
@@ -487,9 +486,12 @@ private[json] object JacksonJson {
     mapper.readValue(jsonParser(input), classOf[JsValue])
   }
 
-  def generateFromJsValue(jsValue: JsValue): String = {
+  def generateFromJsValue(jsValue: JsValue, escapeNonASCII: Boolean = false): String = {
     val sw = new java.io.StringWriter
     val gen = stringJsonGenerator(sw)
+    if (escapeNonASCII) {
+      gen.enable(JsonGenerator.Feature.ESCAPE_NON_ASCII)
+    }
     mapper.writeValue(gen, jsValue)
     sw.flush()
     sw.getBuffer.toString

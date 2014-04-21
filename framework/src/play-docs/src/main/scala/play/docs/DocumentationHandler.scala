@@ -10,8 +10,8 @@ import play.api.http.HeaderNames
 import play.api.libs.concurrent.Execution
 import play.api.libs.iteratee.Enumerator
 import play.api.libs.iteratee.Enumeratee
-import play.core.{ PlayVersion, SBTDocHandler }
-import play.doc.{ FileRepository, PlayDoc }
+import play.core.{ PlayVersion, BuildDocHandler }
+import play.doc.{ FileRepository, PlayDoc, RenderedPage }
 import org.apache.commons.io.IOUtils
 
 /**
@@ -19,13 +19,17 @@ import org.apache.commons.io.IOUtils
  * Documentation is located in the given repository - either a JAR file or directly from
  * the filesystem.
  */
-class DocumentationHandler(repo: FileRepository, apiRepo: FileRepository) extends SBTDocHandler {
+class DocumentationHandler(repo: FileRepository, apiRepo: FileRepository) extends BuildDocHandler {
 
   def this(repo: FileRepository) = this(repo, repo)
 
   val markdownRenderer = new PlayDoc(repo, repo, "resources", PlayVersion.current)
 
-  // Method without Scala types. Required by SBTDocHandler to allow communication
+  val locator: String => String = new Memoise(name =>
+    repo.findFileWithName(name).orElse(apiRepo.findFileWithName(name)).getOrElse(name)
+  )
+
+  // Method without Scala types. Required by BuildDocHandler to allow communication
   // between code compiled by different versions of Scala
   override def maybeHandleDocRequest(request: AnyRef): AnyRef = {
     this.maybeHandleDocRequest(request.asInstanceOf[RequestHeader])
@@ -34,13 +38,13 @@ class DocumentationHandler(repo: FileRepository, apiRepo: FileRepository) extend
   /**
    * Handle the given request if it is a request for documentation content.
    */
-  def maybeHandleDocRequest(request: RequestHeader): Option[SimpleResult] = {
+  def maybeHandleDocRequest(request: RequestHeader): Option[Result] = {
 
     // Assumes caller consumes result, closing entry
-    def sendFileInline(repo: FileRepository, path: String): Option[SimpleResult] = {
+    def sendFileInline(repo: FileRepository, path: String): Option[Result] = {
       import play.api.libs.concurrent.Execution.Implicits.defaultContext
       repo.handleFile(path) { handle =>
-        SimpleResult(
+        Result(
           ResponseHeader(Status.OK, Map(
             HeaderNames.CONTENT_LENGTH -> handle.size.toString,
             HeaderNames.CONTENT_TYPE -> play.api.libs.MimeTypes.forFileName(handle.name).getOrElse(play.api.http.ContentTypes.BINARY)
@@ -84,7 +88,7 @@ class DocumentationHandler(repo: FileRepository, apiRepo: FileRepository) extend
       case apiDoc(page) => {
 
         Some {
-          sendFileInline(apiRepo, "api/" + page).getOrElse(NotFound(views.html.play20.manual(page, None, None)))
+          sendFileInline(apiRepo, "api/" + page).getOrElse(NotFound(views.html.play20.manual(page, None, None, locator)))
         }
 
       }
@@ -92,7 +96,7 @@ class DocumentationHandler(repo: FileRepository, apiRepo: FileRepository) extend
       case wikiResource(path) => {
 
         Some {
-          sendFileInline(repo, path).getOrElse(NotFound("Resource not found [" + path + "]"))
+          sendFileInline(repo, path).orElse(sendFileInline(apiRepo, path)).getOrElse(NotFound("Resource not found [" + path + "]"))
         }
 
       }
@@ -101,13 +105,21 @@ class DocumentationHandler(repo: FileRepository, apiRepo: FileRepository) extend
 
         Some {
           markdownRenderer.renderPage(page) match {
-            case None => NotFound(views.html.play20.manual(page, None, None))
-            case Some((mainPage, None)) => Ok(views.html.play20.manual(page, Some(mainPage), None))
-            case Some((mainPage, Some(sidebar))) => Ok(views.html.play20.manual(page, Some(mainPage), Some(sidebar)))
+            case None => NotFound(views.html.play20.manual(page, None, None, locator))
+            case Some(RenderedPage(mainPage, None, _)) => Ok(views.html.play20.manual(page, Some(mainPage), None, locator))
+            case Some(RenderedPage(mainPage, Some(sidebar), _)) => Ok(views.html.play20.manual(page, Some(mainPage), Some(sidebar), locator))
           }
         }
       }
       case _ => None
     }
   }
+}
+
+/**
+ * Memoise a function.
+ */
+class Memoise[-T, +R](f: T => R) extends (T => R) {
+  private[this] val cache = scala.collection.mutable.Map.empty[T, R]
+  def apply(v: T): R = synchronized { cache.getOrElseUpdate(v, f(v)) }
 }

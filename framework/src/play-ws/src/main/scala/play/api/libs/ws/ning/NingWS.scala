@@ -3,7 +3,8 @@
  */
 package play.api.libs.ws.ning
 
-import com.ning.http.client.{ Response => AHCResponse, Cookie => AHCCookie, ProxyServer => AHCProxyServer, _ }
+import com.ning.http.client.{ Response => AHCResponse, ProxyServer => AHCProxyServer, _ }
+import com.ning.http.client.cookie.{ Cookie => AHCCookie }
 import com.ning.http.client.Realm.{ RealmBuilder, AuthScheme }
 import com.ning.http.util.AsyncHttpProviderUtils
 
@@ -15,18 +16,29 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 
 import play.api.libs.ws._
+import play.api.libs.ws.ssl._
+
 import play.api.http.{ Writeable, ContentTypeOf }
 import play.api.libs.iteratee._
-import play.api.libs.iteratee.Input.El
-import play.api.{ Application, Play }
-
+import play.api.{ Mode, Application, Play }
 import play.core.utils.CaseInsensitiveOrdered
+import play.api.libs.ws.DefaultWSResponseHeaders
+import play.api.libs.iteratee.Input.El
+import javax.net.ssl.SSLParameters
+import org.slf4j.LoggerFactory
+import play.api.libs.ws.ssl.debug._
+
+import scala.collection.JavaConverters._
 
 /**
  * A WS client backed by a Ning AsyncHttpClient.
- * @param config the config for AsyncHttpClient
+ *
+ * If you need to debug Ning, set logger.com.ning.http.client=DEBUG in your application.conf file.
+ *
+ * @param config a client configuration object
  */
 class NingWSClient(config: AsyncHttpClientConfig) extends WSClient {
+
   private val asyncHttpClient = new AsyncHttpClient(config)
 
   def underlying[T] = asyncHttpClient.asInstanceOf[T]
@@ -48,13 +60,11 @@ case class NingWSRequest(client: NingWSClient,
   builder: RequestBuilder)
     extends WSRequest {
 
-  import scala.collection.JavaConverters._
-
   protected var body: Option[String] = None
 
   protected var calculator: Option[WSSignatureCalculator] = _calc
 
-  protected var headers: Map[String, Seq[String]] = Map()
+  protected var headers: Map[String, Seq[String]] = TreeMap[String, Seq[String]]()(CaseInsensitiveOrdered)
 
   protected var _url: String = null
 
@@ -64,9 +74,7 @@ case class NingWSRequest(client: NingWSClient,
   /**
    * Return the current headers of the request being constructed
    */
-  def allHeaders: Map[String, Seq[String]] = {
-    mapAsScalaMapConverter(builder.build().getHeaders).asScala.map(e => e._1 -> e._2.asScala.toSeq).toMap
-  }
+  def allHeaders: Map[String, Seq[String]] = headers
 
   /**
    * Return the current query string parameters
@@ -230,13 +238,13 @@ case class NingWSRequest(client: NingWSClient,
   /**
    * Add http auth headers. Defaults to HTTP Basic.
    */
-  private def auth(username: String, password: String, scheme: AuthScheme = AuthScheme.BASIC): WSRequest = {
-    this.copy(builder = builder.setRealm((new RealmBuilder)
+  private def auth(username: String, password: String, scheme: AuthScheme = AuthScheme.BASIC): Unit = {
+    builder.setRealm((new RealmBuilder)
       .setScheme(scheme)
       .setPrincipal(username)
       .setPassword(password)
       .setUsePreemptiveAuth(true)
-      .build()))
+      .build())
   }
 
   private def ningHeadersToMap(headers: java.util.Map[String, java.util.Collection[String]]) =
@@ -490,115 +498,82 @@ case class NingWSRequestHolder(client: NingWSClient,
   def execute(method: String): Future[WSResponse] = prepare(method).execute
 
   private[play] def prepare(method: String): NingWSRequest = {
-    val request: NingWSRequest = new NingWSRequest(client, method, auth, calc, new RequestBuilder(method)).setUrl(url)
-      .setHeaders(headers)
-      .setQueryString(queryString)
-    followRedirects.map(request.setFollowRedirects)
-    requestTimeout.map {
-      t: Int =>
-        val config = new PerRequestConfig()
-        config.setRequestTimeoutInMs(t)
-        request.setPerRequestConfig(config)
-    }
-
-    virtualHost.map {
-      v =>
-        request.setVirtualHost(v)
-    }
-
-    prepareProxy(request)
-
-    request
-  }
-
-  private[play] def prepareProxy(request: NingWSRequest) {
-    proxyServer.map {
-      p =>
-        import com.ning.http.client.ProxyServer.Protocol
-        val protocol: Protocol = p.protocol.getOrElse("http").toLowerCase match {
-          case "http" => Protocol.HTTP
-          case "https" => Protocol.HTTPS
-          case "kerberos" => Protocol.KERBEROS
-          case "ntlm" => Protocol.NTLM
-          case "spnego" => Protocol.SPNEGO
-          case _ => scala.sys.error("Unrecognized protocol!")
-        }
-
-        val proxyServer = new AHCProxyServer(
-          protocol,
-          p.host,
-          p.port,
-          p.principal.getOrElse(null),
-          p.password.getOrElse(null))
-
-        p.encoding.map {
-          e =>
-            proxyServer.setEncoding(e)
-        }
-
-        p.nonProxyHosts.map {
-          nonProxyHosts =>
-            nonProxyHosts.foreach {
-              nonProxyHost =>
-                proxyServer.addNonProxyHost(nonProxyHost)
-            }
-        }
-
-        p.ntlmDomain.map {
-          ntlm =>
-            proxyServer.setNtlmDomain(ntlm)
-        }
-
-        request.setProxyServer(proxyServer)
-    }
+    new NingWSRequest(client, method, auth, calc, createBuilder(method))
   }
 
   private[play] def prepare(method: String, body: File): NingWSRequest = {
     import com.ning.http.client.generators.FileBodyGenerator
 
     val bodyGenerator = new FileBodyGenerator(body)
-
-    val request = new NingWSRequest(client, method, auth, calc, new RequestBuilder(method)).setUrl(url)
-      .setHeaders(headers)
-      .setQueryString(queryString)
-      .setBody(bodyGenerator)
-    followRedirects.map(request.setFollowRedirects)
-    requestTimeout.map {
-      t: Int =>
-        val config = new PerRequestConfig()
-        config.setRequestTimeoutInMs(t)
-        request.setPerRequestConfig(config)
-    }
-    virtualHost.map {
-      v =>
-        request.setVirtualHost(v)
-    }
-
-    prepareProxy(request)
-
-    request
+    val builder = createBuilder(method).setBody(bodyGenerator)
+    new NingWSRequest(client, method, auth, calc, builder)
   }
 
   private[play] def prepare[T](method: String, body: T)(implicit wrt: Writeable[T], ct: ContentTypeOf[T]): NingWSRequest = {
-    val request = new NingWSRequest(client, method, auth, calc, new RequestBuilder(method)).setUrl(url)
-      .setHeaders(Map("Content-Type" -> Seq(ct.mimeType.getOrElse("text/plain"))) ++ headers)
-      .setQueryString(queryString)
+    val builder = createBuilder(method)
+      .addHeader("Content-Type", ct.mimeType.getOrElse("text/plain"))
       .setBody(wrt.transform(body))
-    followRedirects.map(request.setFollowRedirects)
-    requestTimeout.map {
-      t: Int =>
-        val config = new PerRequestConfig()
-        config.setRequestTimeoutInMs(t)
-        request.setPerRequestConfig(config)
-    }
-    virtualHost.map {
-      v =>
-        request.setVirtualHost(v)
-    }
-    prepareProxy(request)
 
-    request
+    new NingWSRequest(client, method, auth, calc, builder)
   }
+
+  private def createBuilder(method: String) = {
+    val builder = new RequestBuilder(method).setUrl(url)
+
+    for {
+      header <- headers
+      value <- header._2
+    } builder.addHeader(header._1, value)
+
+    for {
+      (key, values) <- queryString
+      value <- values
+    } builder.addQueryParameter(key, value)
+
+    virtualHost.map(builder.setVirtualHost)
+    followRedirects.map(builder.setFollowRedirects)
+
+    proxyServer.map { p =>
+      builder.setProxyServer(createProxy(p))
+    }
+
+    requestTimeout.map { t =>
+      val config = new PerRequestConfig()
+      config.setRequestTimeoutInMs(t)
+      builder.setPerRequestConfig(config)
+    }
+
+    builder
+  }
+
+  private[play] def createProxy(wsServer: WSProxyServer) = {
+    import com.ning.http.client.ProxyServer.Protocol
+    val protocol: Protocol = wsServer.protocol.getOrElse("http").toLowerCase match {
+      case "http" => Protocol.HTTP
+      case "https" => Protocol.HTTPS
+      case "kerberos" => Protocol.KERBEROS
+      case "ntlm" => Protocol.NTLM
+      case "spnego" => Protocol.SPNEGO
+      case _ => scala.sys.error("Unrecognized protocol!")
+    }
+
+    val ningServer = new AHCProxyServer(
+      protocol,
+      wsServer.host,
+      wsServer.port,
+      wsServer.principal.getOrElse(null),
+      wsServer.password.getOrElse(null))
+
+    wsServer.encoding.map(ningServer.setEncoding(_))
+    wsServer.ntlmDomain.map(ningServer.setNtlmDomain(_))
+    for {
+      hosts <- wsServer.nonProxyHosts
+      host <- hosts
+    } ningServer.addNonProxyHost(host)
+
+    ningServer
+  }
+
 }
 
 /**
@@ -609,6 +584,10 @@ class NingWSPlugin(app: Application) extends WSPlugin {
   @volatile var loaded = false
 
   override lazy val enabled = true
+
+  private val config = new DefaultWSConfigParser(app.configuration).parse()
+
+  private lazy val ningAPI = new NingWSAPI(app, config)
 
   override def onStart() {
     loaded = true
@@ -623,48 +602,42 @@ class NingWSPlugin(app: Application) extends WSPlugin {
 
   def api = ningAPI
 
-  private lazy val ningAPI = new NingWSAPI(app)
-
 }
 
-class NingWSAPI(app: Application) extends WSAPI {
-
-  import javax.net.ssl.SSLContext
+class NingWSAPI(app: Application, clientConfig: WSClientConfig) extends WSAPI {
 
   private val clientHolder: AtomicReference[Option[NingWSClient]] = new AtomicReference(None)
 
   private[play] def newClient(): NingWSClient = {
-    val playConfig = app.configuration
-    val asyncHttpConfig = new AsyncHttpClientConfig.Builder()
-      .setConnectionTimeoutInMs(playConfig.getMilliseconds("ws.timeout.connection").getOrElse(120000L).toInt)
-      .setIdleConnectionTimeoutInMs(playConfig.getMilliseconds("ws.timeout.idle").getOrElse(120000L).toInt)
-      .setRequestTimeoutInMs(playConfig.getMilliseconds("ws.timeout.request").getOrElse(120000L).toInt)
-      .setFollowRedirects(playConfig.getBoolean("ws.followRedirects").getOrElse(true))
-      .setUseProxyProperties(playConfig.getBoolean("ws.useProxyProperties").getOrElse(true))
+    val asyncClientConfig = buildAsyncClientConfig(clientConfig)
 
-    playConfig.getString("ws.useragent").map {
-      useragent =>
-        asyncHttpConfig.setUserAgent(useragent)
+    new SystemConfiguration().configure(clientConfig)
+    clientConfig.ssl.map {
+      _.debug.map { debugConfig =>
+        app.mode match {
+          case Mode.Prod =>
+            Play.logger.warn("NingWSAPI: ws.ssl.debug settings enabled in production mode!")
+          case _ => // do nothing
+        }
+        new DebugConfiguration().configure(debugConfig)
+      }
     }
-    if (!playConfig.getBoolean("ws.acceptAnyCertificate").getOrElse(false)) {
-      asyncHttpConfig.setSSLContext(SSLContext.getDefault)
-    }
-    new NingWSClient(asyncHttpConfig.build())
+
+    new NingWSClient(asyncClientConfig)
   }
 
   def client: NingWSClient = {
     clientHolder.get.getOrElse({
-      // A critical section of code. Only one caller has the opportuntity of creating a new client.
+      // A critical section of code. Only one caller has the opportunity of creating a default client.
       synchronized {
         clientHolder.get match {
-          case None => {
+          case None =>
             val client = newClient()
             clientHolder.set(Some(client))
             client
-          }
+
           case Some(client) => client
         }
-
       }
     })
   }
@@ -678,6 +651,9 @@ class NingWSAPI(app: Application) extends WSAPI {
     clientHolder.getAndSet(None).map(oldClient => oldClient.close())
   }
 
+  private[play] def buildAsyncClientConfig(wsClientConfig: WSClientConfig): AsyncHttpClientConfig = {
+    new NingAsyncHttpClientConfigBuilder(wsClientConfig).build()
+  }
 }
 
 /**
@@ -715,19 +691,19 @@ private class NingWSCookie(ahcCookie: AHCCookie) extends WSCookie {
   def path: String = ahcCookie.getPath
 
   /**
+   * The expiry date.
+   */
+  def expires: Option[Long] = if (ahcCookie.getExpires == -1) None else Some(ahcCookie.getExpires)
+
+  /**
    * The maximum age.
    */
-  def maxAge: Int = ahcCookie.getMaxAge
+  def maxAge: Option[Int] = if (ahcCookie.getMaxAge == -1) None else Some(ahcCookie.getMaxAge)
 
   /**
    * If the cookie is secure.
    */
   def secure: Boolean = ahcCookie.isSecure
-
-  /**
-   * The cookie version.
-   */
-  def version: Int = ahcCookie.getVersion
 
   /*
    * Cookie ports should not be used; cookies for a given host are shared across
@@ -750,6 +726,14 @@ case class NingWSResponse(ahcResponse: AHCResponse) extends WSResponse {
    */
   @deprecated("Use underlying", "2.3.0")
   def getAHCResponse = ahcResponse
+
+  /**
+   * Return the headers of the response as a case-insensitive map
+   */
+  lazy val allHeaders: Map[String, Seq[String]] = {
+    TreeMap[String, Seq[String]]()(CaseInsensitiveOrdered) ++
+      mapAsScalaMapConverter(ahcResponse.getHeaders).asScala.mapValues(_.asScala)
+  }
 
   /**
    * @return The underlying response object.
@@ -775,7 +759,6 @@ case class NingWSResponse(ahcResponse: AHCResponse) extends WSResponse {
    * Get all the cookies.
    */
   def cookies: Seq[WSCookie] = {
-    import scala.collection.JavaConverters._
     ahcResponse.getCookies.asScala.map(new NingWSCookie(_))
   }
 

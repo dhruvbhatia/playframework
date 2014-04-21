@@ -46,7 +46,7 @@ Writing SQL queries yourself can be tedious for a simple ‘Hello World’ appli
 You will need to add Anorm and jdbc plugin to your dependencies : 
 
 ```scala
-val appDependencies = Seq(
+libraryDependencies ++= Seq(
   jdbc,
   anorm
 )
@@ -135,6 +135,49 @@ val code: String = SQL(
 // code == "First"
 ```
 
+Columns can also be specified by position, rather than name:
+
+```scala
+// Parsing column by name or position
+val parser = 
+  SqlParser(str("name") ~ float(3) /* third column as float */ map {
+    case name ~ f => (name -> f)
+  }
+
+val product: (String, Float) = SQL("SELECT * FROM prod WHERE id = {id}").
+  on('id -> "p").as(parser.single)
+```
+
+`java.util.UUID` can be used as parameter, in which case its string value is passed to statement.
+
+### Using multi-value parameter
+
+Anorm parameter can be multi-value, like a sequence of string.
+In such case, values will be prepared to be passed to JDBC.
+
+```scala
+// With default formatting (", " as separator)
+SQL("SELECT * FROM Test WHERE cat IN ({categories})").
+  on('categories -> Seq("a", "b", "c")
+// -> SELECT * FROM Test WHERE cat IN ('a', 'b', 'c')
+
+// With custom formatting
+import anorm.SeqParameter
+SQL("SELECT * FROM Test t WHERE {categories}").
+  on('categories -> SeqParameter(
+    values = Seq("a", "b", "c"), separator = " OR ", 
+    pre = "EXISTS (SELECT NULL FROM j WHERE t.id=j.id AND name=",
+    post = ")"))
+/* ->
+SELECT * FROM Test t WHERE 
+EXISTS (SELECT NULL FROM j WHERE t.id=j.id AND name='a') 
+OR EXISTS (SELECT NULL FROM j WHERE t.id=j.id AND name='b') 
+OR EXISTS (SELECT NULL FROM j WHERE t.id=j.id AND name='c')
+*/
+```
+
+### Edge cases
+
 Passing anything different from string or symbol as parameter name is now deprecated. For backward compatibility, you can activate `anorm.features.parameterWithUntypedName`.
 
 ```scala
@@ -143,6 +186,93 @@ import anorm.features.parameterWithUntypedName // activate
 val untyped: Any = "name" // deprecated
 SQL("SELECT * FROM Country WHERE {p}").on(untyped -> "val")
 ```
+
+Type of parameter value should be visible, to be properly set on SQL statement.
+Using value as `Any`, explicitly or due to erasure, leads to compilation error `No implicit view available from Any => anorm.ParameterValue`.
+
+```scala
+// Wrong #1
+val p: Any = "strAsAny"
+SQL("SELECT * FROM test WHERE id={id}").
+  on('id -> p) // Erroneous - No conversion Any => ParameterValue
+
+// Right #1
+val p = "strAsString"
+SQL("SELECT * FROM test WHERE id={id}").on('id -> p)
+
+// Wrong #2
+val ps = Seq("a", "b", 3) // inferred as Seq[Any]
+SQL("SELECT * FROM test WHERE (a={a} AND b={b}) OR c={c}").
+  on('a -> ps(0), // ps(0) - No conversion Any => ParameterValue
+    'b -> ps(1), 
+    'c -> ps(2))
+
+// Right #2
+val ps = Seq[anorm.ParameterValue]("a", "b", 3) // Seq[ParameterValue]
+SQL("SELECT * FROM test WHERE (a={a} AND b={b}) OR c={c}").
+  on('a -> ps(0), 'b -> ps(1), 'c -> ps(2))
+
+// Wrong #3
+val ts = Seq( // Seq[(String -> Any)] due to _2
+  "a" -> "1", "b" -> "2", "c" -> 3)
+
+val nps: Seq[NamedParameter] = ts map { t => 
+  val p: NamedParameter = t; p
+  // Erroneous - no conversion (String,Any) => NamedParameter
+}
+
+SQL("SELECT * FROM test WHERE (a={a} AND b={b}) OR c={c}").on(nps :_*) 
+
+// Right #3
+val nps = Seq[NamedParameter]( // Tuples as NamedParameter before Any
+  "a" -> "1", "b" -> "2", "c" -> 3)
+SQL("SELECT * FROM test WHERE (a={a} AND b={b}) OR c={c}").
+  on(nps: _*) // Fail - no conversion (String,Any) => NamedParameter
+```
+
+For backward compatibility, you can activate such unsafe parameter conversion, 
+accepting untyped `Any` value, with `anorm.features.anyToStatement`.
+
+```scala
+import anorm.features.anyToStatement
+
+val d = new java.util.Date()
+val params: Seq[NamedParameter] = Seq("mod" -> d, "id" -> "idv")
+// Values as Any as heterogenous
+
+SQL("UPDATE item SET last_modified = {mod} WHERE id = {id}").on(params:_*)
+```
+
+It's not recommanded because moreover hiding implicit resolution issues, as untyped it could lead to runtime conversion error, with values are passed on statement using `setObject`.
+In previous example, `java.util.Date` is accepted as parameter but would with most databases raise error (as it's not valid JDBC type).
+
+### SQL queries using String Interpolation
+
+Since Scala 2.10 supports custom String Interpolation there is also a 1-step alternative to `SQL(queryString).on(params)` seen before. You can abbreviate the code as: 
+
+```scala
+val name = "Cambridge"
+val country = "New Zealand"
+
+SQL"insert into City(name, country) values ($name, $country)")
+```
+
+It also supports multi-line string and inline expresions:
+
+```scala
+val lang = "French"
+val population = 10000000
+val margin = 500000
+
+val code: String = SQL"""
+  select * from Country c 
+    join CountryLanguage l on l.CountryCode = c.Code 
+    where l.Language = $lang and c.Population >= ${population - margin}
+    order by c.Population desc limit 1"""
+  .as(SqlParser.str("Country.code").single)
+```
+
+This feature tries to make faster, more concise and easier to read the way to retrieve data in Anorm. Please, feel free to use it wherever you see a combination of `SQL().on()` functions (or even an only `SQL()` without parameters).
 
 ## Retrieving data using the Stream API
 
@@ -275,6 +405,29 @@ implicit def columnToBoolean: Column[Boolean] =
   }
 ```
 
+Custom or specific DB conversion for parameter can also be provided:
+
+```
+import java.sql.PreparedStatement
+import anorm.ToStatement
+
+// Custom conversion to statement for type T
+implicit def customToStatement: ToStatement[T] = new ToStatement[T] {
+  def set(statement: PreparedStatement, i: Int, value: T): Unit =
+    ??? // Sets |value| on |statement|
+}
+```
+
+If involved type accept `null` value, it must be appropriately handled in conversion. Even if accepted by type, when `null` must be refused for parameter conversion, marker trait `NotNullGuard` can be used: `new ToStatement[T] with NotNullGuard { /* ... */ }`.
+
+For DB specific parameter, it can be explicitly passed as opaque value.
+In this case at your own risk, `setObject` will be used on statement.
+
+```scala
+val anyVal: Any = myVal
+SQL("UPDATE t SET v = {opaque}").on('opaque -> anorm.Object(anyVal))
+```
+
 ## Dealing with Nullable columns
 
 If a column can contain `Null` values in the database schema, you need to manipulate it as an `Option` type.
@@ -352,7 +505,7 @@ Let’s write a more complicated parser:
 `str("name") ~ int("population")`, will create a `RowParser` able to parse a row containing a String `name` column and an Integer `population` column. Then we can create a `ResultSetParser` that will parse as many rows of this kind as it can, using `*`: 
 
 ```scala
-val populations:List[String~Int] = {
+val populations: List[String~Int] = {
   SQL("select * from Country").as( str("name") ~ int("population") * ) 
 }
 ```
@@ -362,16 +515,16 @@ As you see, this query’s result type is `List[String~Int]` - a list of country
 You can also rewrite the same code as:
 
 ```scala
-val result:List[String~Int] = {
+val result: List[String~Int] = {
   SQL("select * from Country")
-  .as(get[String]("name") ~ get[Int]("population")*) 
+  .as(get[String]("name") ~ get[Int]("population") *)
 }
 ```
 
 Now what about the `String~Int` type? This is an **Anorm** type that is not really convenient to use outside of your database access code. You would rather have a simple tuple `(String, Int)` instead. You can use the `map` function on a `RowParser` to transform its result to a more convenient type:
 
 ```scala
-str("name") ~ int("population") map { case n~p => (n,p) }
+val parser = str("name") ~ int("population") map { case n~p => (n,p) }
 ```
 
 > **Note:** We created a tuple `(String,Int)` here, but there is nothing stopping you from transforming the `RowParser` result to any other type, such as a custom case class.
@@ -379,12 +532,11 @@ str("name") ~ int("population") map { case n~p => (n,p) }
 Now, because transforming `A ~ B ~ C` types to `(A, B, C)` is a common task, we provide a `flatten` function that does exactly that. So you finally write:
 
 ```scala
-val result: List[(String, Int)] = {
-  SQL("select * from Country").as(
-    str("name") ~ int("population") map(flatten) *
-  ) 
-}
+val result: List[(String, Int)] = 
+  SQL("select * from Country").as(parser.*)
 ```
+
+If list should not be empty, `parser.+` can be used instead of `parser.*`.
 
 ### A more complicated example
 

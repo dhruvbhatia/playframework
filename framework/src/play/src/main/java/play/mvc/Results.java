@@ -32,26 +32,6 @@ public class Results {
      */
     public static Result TODO = new Todo();
 
-    /**
-     * Handles an Asynchronous result.
-     *
-     * @deprecated Return Promise&lt;Result&gt; from your action instead
-     */
-    @Deprecated
-    public static <R extends Result> AsyncResult async(play.libs.F.Promise<R> p) {
-        return new AsyncResult(p.flatMap(new Function<R, play.libs.F.Promise<SimpleResult>>() {
-            @Override
-            public play.libs.F.Promise<SimpleResult> apply(R result) throws Throwable {
-                if (result instanceof AsyncResult) {
-                    return ((AsyncResult)result).promise;
-                } else {
-                    // Must be a simple result
-                    return play.libs.F.Promise.pure((SimpleResult) result);
-                }
-            }
-        }));
-    }
-
     // -- Status
 
     /**
@@ -987,7 +967,7 @@ public class Results {
      *
      * @param url The url to redirect.
      */
-    public static SimpleResult redirect(String url) {
+    public static Result redirect(String url) {
         return new Redirect(303, url);
     }
 
@@ -996,7 +976,7 @@ public class Results {
      *
      * @param call Call defining the url to redirect (typically comes from reverse router).
      */
-    public static SimpleResult redirect(Call call) {
+    public static Result redirect(Call call) {
         return new Redirect(303, call.url());
     }
 
@@ -1007,7 +987,7 @@ public class Results {
      *
      * @param url The url to redirect.
      */
-    public static SimpleResult found(String url) {
+    public static Result found(String url) {
         return new Redirect(302, url);
     }
 
@@ -1016,7 +996,7 @@ public class Results {
      *
      * @param call Call defining the url to redirect (typically comes from reverse router).
      */
-    public static SimpleResult found(Call call) {
+    public static Result found(Call call) {
         return new Redirect(302, call.url());
     }
 
@@ -1027,7 +1007,7 @@ public class Results {
      *
      * @param url The url to redirect.
      */
-    public static SimpleResult movedPermanently(String url) {
+    public static Result movedPermanently(String url) {
         return new Redirect(301, url);
     }
 
@@ -1036,7 +1016,7 @@ public class Results {
      *
      * @param call Call defining the url to redirect (typically comes from reverse router).
      */
-    public static SimpleResult movedPermanently(Call call) {
+    public static Result movedPermanently(Call call) {
         return new Redirect(301, call.url());
     }
 
@@ -1047,7 +1027,7 @@ public class Results {
      *
      * @param url The url to redirect.
      */
-    public static SimpleResult seeOther(String url) {
+    public static Result seeOther(String url) {
         return new Redirect(303, url);
     }
 
@@ -1056,7 +1036,7 @@ public class Results {
      *
      * @param call Call defining the url to redirect (typically comes from reverse router).
      */
-    public static SimpleResult seeOther(Call call) {
+    public static Result seeOther(Call call) {
         return new Redirect(303, call.url());
     }
 
@@ -1067,7 +1047,7 @@ public class Results {
      *
      * @param url The url to redirect.
      */
-    public static SimpleResult temporaryRedirect(String url) {
+    public static Result temporaryRedirect(String url) {
         return new Redirect(307, url);
     }
 
@@ -1076,7 +1056,7 @@ public class Results {
      *
      * @param call Call defining the url to redirect (typically comes from reverse router).
      */
-    public static SimpleResult temporaryRedirect(Call call) {
+    public static Result temporaryRedirect(Call call) {
         return new Redirect(307, call.url());
     }
 
@@ -1107,7 +1087,7 @@ public class Results {
                         try {
                             callback.invoke();
                         } catch(Throwable e) {
-                            play.Logger.of("play").error("Exception is Chunks disconnected callback", e);
+                            play.PlayInternal.logger().error("Exception is Chunks disconnected callback", e);
                         }
                     }
                 }
@@ -1176,6 +1156,70 @@ public class Results {
             super(play.core.j.JavaResults.writeString(codec));
         }
 
+        /**
+         * Creates a StringChunks. The abstract {@code onReady} method is
+         * implemented using the specified {@code Callback<Chunks.Out<String>>}.
+         *
+         * Uses UTF-8 by default.
+         *
+         * @param callback the callback used to implement onReady
+         * @return a new StringChunks
+         * @throws NullPointerException if the specified callback is null
+         */
+        public static StringChunks whenReady(Callback<Chunks.Out<String>> callback) {
+            return whenReady(utf8, callback);
+        }
+
+        /**
+         * Creates a StringChunks. The abstract {@code onReady} method is
+         * implemented using the specified {@code Callback<Chunks.Out<String>>}.
+         *
+         * @param codec the Codec charset used
+         * @param callback the callback used to implement onReady
+         * @return a new StringChunks
+         * @throws NullPointerException if the specified callback is null
+         */
+        public static StringChunks whenReady(String codec, Callback<Chunks.Out<String>> callback) {
+            return whenReady(Codec.javaSupported(codec), callback);
+        }
+
+        /**
+         * Creates a StringChunks. The abstract {@code onReady} method is
+         * implemented using the specified {@code Callback<Chunks.Out<String>>}.
+         *
+         * @param codec the Codec used
+         * @param callback the callback used to implement onReady
+         * @return a new StringChunks
+         * @throws NullPointerException if the specified callback is null
+         */
+        public static StringChunks whenReady(Codec codec, Callback<Chunks.Out<String>> callback) {
+            return new WhenReadyStringChunks(codec, callback);
+        }
+
+        /**
+         * An extension of StringChunks that obtains its onReady from
+         * the specified {@code Callback<Chunks.Out<String>>}.
+         */
+        static final class WhenReadyStringChunks extends StringChunks {
+
+            private final Callback<Chunks.Out<String>> callback;
+
+            WhenReadyStringChunks(Codec codec, Callback<Chunks.Out<String>> callback) {
+                super(codec);
+                if (callback == null) throw new NullPointerException("StringChunks onReady callback cannot be null");
+                this.callback = callback;
+            }
+
+            @Override
+            public void onReady(Chunks.Out<String> out) {
+                try {
+                    callback.invoke(out);
+                } catch (Throwable e) {
+                    play.PlayInternal.logger().error("Exception in StringChunks.onReady", e);
+                }
+            }
+        }
+
     }
 
     /**
@@ -1187,53 +1231,50 @@ public class Results {
             super(play.core.j.JavaResults.writeBytes());
         }
 
-    }
-
-    /**
-     * An asynchronous result.
-     *
-     * @deprecated return Promise&lt;Result&gt; from your actions instead.
-     */
-    @Deprecated
-    public static class AsyncResult implements Result {
-
-        private final F.Promise<SimpleResult> promise;
-        private final Http.Context context = Http.Context.current();
-
-        public AsyncResult(F.Promise<SimpleResult> promise) {
-            this.promise = promise;
+        /**
+         * Creates a ByteChunks. The abstract {@code onReady} method is
+         * implemented using the specified {@code Callback<Chunks.Out<byte[]>>}.
+         *
+         * @param callback the callback used to implement onReady
+         * @return a new ByteChunks
+         * @throws NullPointerException if the specified callback is null
+         */
+        public static ByteChunks whenReady(Callback<Chunks.Out<byte[]>> callback) {
+            return new WhenReadyByteChunks(callback);
         }
 
         /**
-         * Transform this asynchronous result
-         *
-         * @param f The transformation function
-         * @return The transformed AsyncResult
+         * An extension of ByteChunks that obtains its onReady from
+         * the specified {@code Callback<Chunks.Out<byte[]>>}.
          */
-        public AsyncResult transform(F.Function<SimpleResult, SimpleResult> f) {
-            return new AsyncResult(promise.map(f));
-        }
+        static final class WhenReadyByteChunks extends ByteChunks {
 
-        public scala.concurrent.Future<play.api.mvc.SimpleResult> getWrappedResult() {
-            return promise.map(new Function<SimpleResult, play.api.mvc.SimpleResult>() {
-                @Override
-                public play.api.mvc.SimpleResult apply(SimpleResult result) throws Throwable {
-                    return play.core.j.JavaHelpers$.MODULE$.createResult(context, result);
+            private final Callback<Chunks.Out<byte[]>> callback;
+
+            WhenReadyByteChunks(Callback<Chunks.Out<byte[]>> callback) {
+                super();
+                if (callback == null) throw new NullPointerException("ByteChunks onReady callback cannot be null");
+                this.callback = callback;
+            }
+
+            @Override
+            public void onReady(Chunks.Out<byte[]> out) {
+                try {
+                    callback.invoke(out);
+                } catch (Throwable e) {
+                    play.PlayInternal.logger().error("Exception in ByteChunks.onReady", e);
                 }
-            }).wrapped();
+            }
         }
 
-        public Promise<SimpleResult> getPromise() {
-            return promise;
-        }
     }
 
     /**
      * A 501 NOT_IMPLEMENTED simple result.
      */
-    public static class Todo extends SimpleResult {
+    public static class Todo implements Result {
 
-        final private play.api.mvc.SimpleResult wrappedResult;
+        final private play.api.mvc.Result wrappedResult;
 
         public Todo() {
             wrappedResult = play.core.j.JavaResults.NotImplemented().apply(
@@ -1242,8 +1283,7 @@ public class Results {
                     );
         }
 
-        @Override
-        public play.api.mvc.SimpleResult getWrappedSimpleResult() {
+        public play.api.mvc.Result toScala() {
             return this.wrappedResult;
         }
     }
@@ -1251,9 +1291,9 @@ public class Results {
     /**
      * A simple result.
      */
-    public static class Status extends SimpleResult {
+    public static class Status implements Result {
 
-        private play.api.mvc.SimpleResult wrappedResult;
+        private play.api.mvc.Result wrappedResult;
 
         public Status(play.api.mvc.Results.Status status) {
             wrappedResult = status.apply(
@@ -1344,7 +1384,7 @@ public class Results {
                     );
         }
 
-        public play.api.mvc.SimpleResult getWrappedSimpleResult() {
+        public play.api.mvc.Result toScala() {
             return wrappedResult;
         }
 
@@ -1365,15 +1405,15 @@ public class Results {
     /**
      * A redirect result.
      */
-    public static class Redirect extends SimpleResult {
+    public static class Redirect implements Result {
 
-        final private play.api.mvc.SimpleResult wrappedResult;
+        final private play.api.mvc.Result wrappedResult;
 
         public Redirect(int status, String url) {
             wrappedResult = play.core.j.JavaResults.Redirect(url, status);
         }
 
-        public play.api.mvc.SimpleResult getWrappedSimpleResult() {
+        public play.api.mvc.Result toScala() {
             return this.wrappedResult;
         }
 

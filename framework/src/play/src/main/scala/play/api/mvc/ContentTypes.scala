@@ -18,6 +18,7 @@ import scala.collection.mutable.ListBuffer
 import scalax.io.Resource
 import java.util.Locale
 import scala.util.control.NonFatal
+import play.api.http.HttpVerbs
 
 /**
  * A request body that adapts automatically according the request Content-Type.
@@ -413,8 +414,8 @@ trait BodyParsers {
     /**
      * Don't parse the body content.
      */
-    def empty: BodyParser[Option[Any]] = BodyParser("empty") { request =>
-      Done(Right(None), Empty)
+    def empty: BodyParser[Unit] = BodyParser("empty") { request =>
+      Done(Right(()), Empty)
     }
 
     // -- XML parser
@@ -543,34 +544,36 @@ trait BodyParsers {
      */
     def anyContent: BodyParser[AnyContent] = BodyParser("anyContent") { request =>
       import play.api.libs.iteratee.Execution.Implicits.trampoline
-      request.contentType.map(_.toLowerCase(Locale.ENGLISH)) match {
-        case _ if request.method == "GET" || request.method == "HEAD" => {
-          Play.logger.trace("Parsing AnyContent as empty")
-          empty(request).map(_.right.map(_ => AnyContentAsEmpty))
-        }
-        case Some("text/plain") => {
-          Play.logger.trace("Parsing AnyContent as text")
-          text(request).map(_.right.map(s => AnyContentAsText(s)))
-        }
-        case Some("text/xml") | Some("application/xml") | Some(ApplicationXmlMatcher()) => {
-          Play.logger.trace("Parsing AnyContent as xml")
-          xml(request).map(_.right.map(x => AnyContentAsXml(x)))
-        }
-        case Some("text/json") | Some("application/json") => {
-          Play.logger.trace("Parsing AnyContent as json")
-          json(request).map(_.right.map(j => AnyContentAsJson(j)))
-        }
-        case Some("application/x-www-form-urlencoded") => {
-          Play.logger.trace("Parsing AnyContent as urlFormEncoded")
-          urlFormEncoded(request).map(_.right.map(d => AnyContentAsFormUrlEncoded(d)))
-        }
-        case Some("multipart/form-data") => {
-          Play.logger.trace("Parsing AnyContent as multipartFormData")
-          multipartFormData(request).map(_.right.map(m => AnyContentAsMultipartFormData(m)))
-        }
-        case _ => {
-          Play.logger.trace("Parsing AnyContent as raw")
-          raw(request).map(_.right.map(r => AnyContentAsRaw(r)))
+      if (request.method == HttpVerbs.GET || request.method == HttpVerbs.HEAD) {
+        Play.logger.trace("Parsing AnyContent as empty")
+        Done(Right(AnyContentAsEmpty), Empty)
+      } else {
+        val contentType: Option[String] = request.contentType.map(_.toLowerCase(Locale.ENGLISH))
+        contentType match {
+          case Some("text/plain") => {
+            Play.logger.trace("Parsing AnyContent as text")
+            text(request).map(_.right.map(s => AnyContentAsText(s)))
+          }
+          case Some("text/xml") | Some("application/xml") | Some(ApplicationXmlMatcher()) => {
+            Play.logger.trace("Parsing AnyContent as xml")
+            xml(request).map(_.right.map(x => AnyContentAsXml(x)))
+          }
+          case Some("text/json") | Some("application/json") => {
+            Play.logger.trace("Parsing AnyContent as json")
+            json(request).map(_.right.map(j => AnyContentAsJson(j)))
+          }
+          case Some("application/x-www-form-urlencoded") => {
+            Play.logger.trace("Parsing AnyContent as urlFormEncoded")
+            urlFormEncoded(request).map(_.right.map(d => AnyContentAsFormUrlEncoded(d)))
+          }
+          case Some("multipart/form-data") => {
+            Play.logger.trace("Parsing AnyContent as multipartFormData")
+            multipartFormData(request).map(_.right.map(m => AnyContentAsMultipartFormData(m)))
+          }
+          case _ => {
+            Play.logger.trace("Parsing AnyContent as raw")
+            raw(request).map(_.right.map(r => AnyContentAsRaw(r)))
+          }
         }
       }
     }
@@ -631,9 +634,9 @@ trait BodyParsers {
             val maxHeaderBuffer = Traversable.takeUpTo[Array[Byte]](4 * 1024) transform Iteratee.consume[Array[Byte]]()
 
             val collectHeaders = maxHeaderBuffer.map { buffer =>
-              val (headerBytes, rest) = Option(buffer.drop(2)).map(b => b.splitAt(b.indexOfSlice(CRLFCRLF))).get
+              val (headerBytes, rest) = Option(buffer).map(b => b.splitAt(b.indexOfSlice(CRLFCRLF))).get
 
-              val headerString = new String(headerBytes, "utf-8")
+              val headerString = new String(headerBytes, "utf-8").trim
               val headers = headerString.lines.map { header =>
                 val key :: value = header.trim.split(":").toList
                 (key.trim.toLowerCase, value.mkString.trim)
@@ -820,7 +823,7 @@ trait BodyParsers {
     /**
      * A body parser that always returns an error.
      */
-    def error[A](result: Future[SimpleResult]): BodyParser[A] = BodyParser("error, result=" + result) { request =>
+    def error[A](result: Future[Result]): BodyParser[A] = BodyParser("error, result=" + result) { request =>
       import play.api.libs.iteratee.Execution.Implicits.trampoline
       Iteratee.flatten(result.map(r => Done(Left(r), Empty)))
     }
@@ -835,7 +838,7 @@ trait BodyParsers {
     /**
      * Create a conditional BodyParser.
      */
-    def when[A](predicate: RequestHeader => Boolean, parser: BodyParser[A], badResult: RequestHeader => Future[SimpleResult]): BodyParser[A] = {
+    def when[A](predicate: RequestHeader => Boolean, parser: BodyParser[A], badResult: RequestHeader => Future[Result]): BodyParser[A] = {
       BodyParser("conditional, wrapping=" + parser.toString) { request =>
         if (predicate(request)) {
           parser(request)
@@ -846,7 +849,7 @@ trait BodyParsers {
       }
     }
 
-    private def createBadResult(msg: String): RequestHeader => Future[SimpleResult] = { request =>
+    private def createBadResult(msg: String): RequestHeader => Future[Result] = { request =>
       Play.maybeApplication.map(_.global.onBadRequest(request, msg))
         .getOrElse(Future.successful(Results.BadRequest))
     }
@@ -856,7 +859,7 @@ trait BodyParsers {
         import play.api.libs.iteratee.Execution.Implicits.trampoline
         import scala.util.control.Exception._
 
-        val bodyParser: Iteratee[Array[Byte], Either[SimpleResult, Either[Future[SimpleResult], A]]] =
+        val bodyParser: Iteratee[Array[Byte], Either[Result, Either[Future[Result], A]]] =
           Traversable.takeUpTo[Array[Byte]](maxLength).transform(
             Iteratee.consume[Array[Byte]]().map { bytes =>
               allCatch[A].either {

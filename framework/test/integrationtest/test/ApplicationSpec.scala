@@ -6,6 +6,8 @@ package test
 import play.api.test._
 
 import models._
+import play.api.libs.json.Json
+import play.api.libs.json.JsString
 import play.api.mvc.AnyContentAsEmpty
 import module.Routes
 
@@ -57,9 +59,9 @@ class ApplicationSpec extends PlaySpecification with WsTestClient {
       contentAsString(result) must contain("{\"id\":1,\"name\":\"Sadek\",\"favThings\":[\"tea\"]}")
     }
 
-    def javaResult(result: Future[play.api.mvc.SimpleResult]) =
+    def javaResult(result: Future[play.api.mvc.Result]) =
       new play.mvc.Result {
-        def getWrappedResult = result
+        def toScala = await(result)
       }
 
     "execute json with content type" in new WithApplication() {
@@ -171,7 +173,9 @@ class ApplicationSpec extends PlaySpecification with WsTestClient {
     "instantiate controllers" in {
       "Java controller instance" in new WithApplication() {
         val Some(result) = route(FakeRequest(GET, controllers.routes.JavaControllerInstance.index().url))
-        contentAsString(result) must equalTo("{\"peter\":\"foo\",\"yay\":\"value\"}")
+        val json = Json.parse(contentAsString(result))
+        json \ "peter" must equalTo(JsString("foo"))
+        json \ "yay" must equalTo(JsString("value"))
         contentType(result) must equalTo(Some("application/json"))
       }
       "Scala controller instance" in new WithApplication() {
@@ -353,18 +357,18 @@ class ApplicationSpec extends PlaySpecification with WsTestClient {
     }
 
     "break down code adding values to the session" in new WithApplication(FakeApplication(additionalConfiguration = Map("application.secret" -> "foobar"))) {
-      import play.api.mvc.{SimpleResult, RequestHeader, Results}
+      import play.api.mvc.{Result, RequestHeader, Results}
 
       implicit val request = FakeRequest(GET, "/").withSession("blah" -> "42", "toto" -> "tata")
 
       def setFoo(implicit request: RequestHeader) =
-        (result: SimpleResult) => result.addingToSession("foo" -> "bar")
+        (result: Result) => result.addingToSession("foo" -> "bar")
 
       def setBaz(implicit request: RequestHeader) =
-        (result: SimpleResult) => result.addingToSession("baz" -> "bah")
+        (result: Result) => result.addingToSession("baz" -> "bah")
 
       def removeBlah(implicit request: RequestHeader) =
-        (result: SimpleResult) => result.removingFromSession("blah")
+        (result: Result) => result.removingFromSession("blah")
 
       val result = (setFoo andThen setBaz andThen removeBlah)(Results.Ok)
 

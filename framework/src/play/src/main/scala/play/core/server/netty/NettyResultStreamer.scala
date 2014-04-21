@@ -23,6 +23,8 @@ import scala.util.{ Failure, Success }
  */
 object NettyResultStreamer {
 
+  import NettyFuture._
+
   // A channel status holds whether the connection must be closed and the last subsequence sent
   class ChannelStatus(val closeConnection: Boolean, val lastSubsequence: Int)
 
@@ -31,7 +33,7 @@ object NettyResultStreamer {
    *
    * @return A Future that will be redeemed when the result is completely sent
    */
-  def sendResult(result: SimpleResult, closeConnection: Boolean, httpVersion: HttpVersion, startSequence: Int)(implicit ctx: ChannelHandlerContext, oue: OrderedUpstreamMessageEvent): Future[_] = {
+  def sendResult(result: Result, closeConnection: Boolean, httpVersion: HttpVersion, startSequence: Int)(implicit ctx: ChannelHandlerContext, oue: OrderedUpstreamMessageEvent): Future[_] = {
     // Result of this iteratee is a completion status
     val sentResponse: Future[ChannelStatus] = result match {
 
@@ -114,9 +116,9 @@ object NettyResultStreamer {
       case Right(chunk) => {
         val buffer = chunk.map(ChannelBuffers.wrappedBuffer).getOrElse(ChannelBuffers.EMPTY_BUFFER)
         // We successfully buffered it, so set the content length and send the whole thing as one buffer
-        nettyResponse.setHeader(CONTENT_LENGTH, buffer.readableBytes)
+        nettyResponse.headers().set(CONTENT_LENGTH, buffer.readableBytes)
         nettyResponse.setContent(buffer)
-        val promise = NettyPromise(sendDownstream(startSequence, !closeConnection, nettyResponse))
+        val promise = sendDownstream(startSequence, !closeConnection, nettyResponse).toScala
         val done = Done[Array[Byte], ChannelStatus](new ChannelStatus(closeConnection, startSequence))
         Iteratee.flatten(promise.map(_ => done).recover {
           case _ => done
@@ -130,7 +132,7 @@ object NettyResultStreamer {
           nettyStreamIteratee(nettyResponse, startSequence, true)
         } else {
           // Chunk it
-          nettyResponse.setHeader(TRANSFER_ENCODING, CHUNKED)
+          nettyResponse.headers().set(TRANSFER_ENCODING, CHUNKED)
           Results.chunk &>> nettyStreamIteratee(nettyResponse, startSequence, closeConnection)
         }
 
@@ -173,17 +175,17 @@ object NettyResultStreamer {
         val cookieValues = Cookies.decode(value).map {
           c: play.api.mvc.Cookie => Cookies.encode(Seq(c))
         }.asJava
-        nettyResponse.setHeader(name, cookieValues)
+        nettyResponse.headers().set(name, cookieValues)
       }
 
-      case (name, value) => nettyResponse.setHeader(name, value)
+      case (name, value) => nettyResponse.headers().set(name, value)
     }
 
     // Response header Connection: Keep-Alive is needed for HTTP 1.0
     if (!closeConnection && httpVersion == HttpVersion.HTTP_1_0) {
-      nettyResponse.setHeader(CONNECTION, KEEP_ALIVE)
+      nettyResponse.headers().set(CONNECTION, KEEP_ALIVE)
     } else if (closeConnection && httpVersion == HttpVersion.HTTP_1_1) {
-      nettyResponse.setHeader(CONNECTION, CLOSE)
+      nettyResponse.headers().set(CONNECTION, CLOSE)
     }
 
     nettyResponse
@@ -203,7 +205,7 @@ object NettyResultStreamer {
       Done(done)
     } else {
       Iteratee.flatten(
-        NettyPromise(future).map[Iteratee[E, A]] {
+        future.toScala.map[Iteratee[E, A]] {
           _ => if (ctx.getChannel.isConnected()) Cont(step) else Done(done)
         }.recover[Iteratee[E, A]] {
           case _ => Done(done)
@@ -216,7 +218,7 @@ object NettyResultStreamer {
    * Extractor object that determines whether the end of the body is specified by the protocol
    */
   object EndOfBodyInProtocol {
-    def unapply(result: SimpleResult): Boolean = {
+    def unapply(result: Result): Boolean = {
       import result.header.headers
       headers.contains(TRANSFER_ENCODING) || headers.contains(CONTENT_LENGTH)
     }
@@ -226,14 +228,14 @@ object NettyResultStreamer {
    * Extractor object that determines whether the result specifies that the connection should be closed
    */
   object CloseConnection {
-    def unapply(result: SimpleResult): Boolean = result.connection == HttpConnection.Close
+    def unapply(result: Result): Boolean = result.connection == HttpConnection.Close
   }
 
   /**
    * Extractor object that determines whether the result uses a transfer encoding
    */
   object UsesTransferEncoding {
-    def unapply(result: SimpleResult): Boolean = result.header.headers.contains(TRANSFER_ENCODING)
+    def unapply(result: Result): Boolean = result.header.headers.contains(TRANSFER_ENCODING)
   }
 
 }

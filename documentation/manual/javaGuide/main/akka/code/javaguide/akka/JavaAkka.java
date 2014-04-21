@@ -10,6 +10,7 @@ import javaguide.testhelpers.MockJavaAction;
 import org.junit.Before;
 import org.junit.Test;
 import play.libs.Akka;
+import play.libs.F.Promise;
 import play.mvc.Result;
 import play.test.WithApplication;
 import play.test.Helpers;
@@ -31,7 +32,7 @@ public class JavaAkka extends WithApplication {
     @Test
     public void actorFor() throws Exception {
         //#actor-for
-        ActorRef myActor = Akka.system().actorOf(new Props(MyActor.class));
+        ActorRef myActor = Akka.system().actorOf(Props.create(MyActor.class));
         //#actor-for
 
         latch = new CountDownLatch(1);
@@ -56,9 +57,9 @@ public class JavaAkka extends WithApplication {
 
     @Test
     public void ask() throws Exception {
-        Akka.system().actorOf(new Props(EchoActor.class), "my-actor");
+        Akka.system().actorOf(Props.create(EchoActor.class), "my-actor");
         Result result = MockJavaAction.call(new MockJavaAction() {
-            public Result index() {
+            public Promise<Result> index() {
                 return javaguide.akka.ask.Application.index();
             }
         }, Helpers.fakeRequest());
@@ -75,7 +76,7 @@ public class JavaAkka extends WithApplication {
     @Test
     public void async() throws Exception {
         Result result = MockJavaAction.call(new MockJavaAction() {
-            public Result index() {
+            public Promise<Result> index() {
                 return javaguide.akka.async.Application.index();
             }
         }, Helpers.fakeRequest());
@@ -85,7 +86,7 @@ public class JavaAkka extends WithApplication {
     @Test
     public void scheduleActor() throws Exception {
         latch = new CountDownLatch(1);
-        ActorRef testActor = Akka.system().actorOf(new Props(MyActor.class));
+        ActorRef testActor = Akka.system().actorOf(Props.create(MyActor.class));
         //#schedule-actor
         Akka.system().scheduler().schedule(
                 Duration.create(0, TimeUnit.MILLISECONDS), //Initial delay 0 milliseconds

@@ -27,7 +27,7 @@ object SqlParser {
           meta <- row.metaData.ms.headOption.toRight(NoColumnsInReturnedResult)
           value <- row.data.headOption.toRight(NoColumnsInReturnedResult)
           result <- transformer(value, meta)
-        } yield result).fold(e => Error(e), a => Success(a))
+        } yield result).fold(Error(_), Success(_))
       }
     }
 
@@ -55,7 +55,23 @@ object SqlParser {
    *     SqlParser.flatten) single)
    * }}}
    */
-  def float(columnName: String): RowParser[Float] = get[Float](columnName)(implicitly[Column[Float]])
+  def float(columnName: String)(implicit c: Column[Float]): RowParser[Float] =
+    get[Float](columnName)(c)
+
+  /**
+   * Parses specified column as float.
+   * @param columnPosition from 1 to n
+   *
+   * {{{
+   * import anorm.{ SQL, SqlParser }
+   *
+   * val t: (Float, String) = SQL("SELECT a, b FROM test")
+   *   .as(SqlParser.float(1) ~ SqlParser.str("b") map (
+   *     SqlParser.flatten) single)
+   * }}}
+   */
+  def float(columnPosition: Int)(implicit c: Column[Float]): RowParser[Float] =
+    get[Float](columnPosition)(c)
 
   /**
    * Parses specified column as string.
@@ -68,7 +84,23 @@ object SqlParser {
    *     SqlParser.flatten) single)
    * }}}
    */
-  def str(columnName: String): RowParser[String] = get[String](columnName)(implicitly[anorm.Column[String]])
+  def str(columnName: String)(implicit c: Column[String]): RowParser[String] =
+    get[String](columnName)(c)
+
+  /**
+   * Parses specified column as string.
+   * @param columnPosition from 1 to n
+   *
+   * {{{
+   * import anorm.{ SQL, SqlParser }
+   *
+   * val t: (Float, String) = SQL("SELECT a, b FROM test")
+   *   .as(SqlParser.float("a") ~ SqlParser.str(1) map (
+   *     SqlParser.flatten) single)
+   * }}}
+   */
+  def str(columnPosition: Int)(implicit c: Column[String]): RowParser[String] =
+    get[String](columnPosition)(c)
 
   /**
    * Parses specified column as boolean.
@@ -81,7 +113,21 @@ object SqlParser {
    *     SqlParser.flatten) single)
    * }}}
    */
-  def bool(columnName: String): RowParser[Boolean] = get[Boolean](columnName)(implicitly[Column[Boolean]])
+  def bool(columnName: String)(implicit c: Column[Boolean]): RowParser[Boolean] = get[Boolean](columnName)(c)
+
+  /**
+   * Parses specified column as boolean.
+   * @param columnPosition from 1 to n
+   *
+   * {{{
+   * import anorm.{ SQL, SqlParser }
+   *
+   * val t: (Boolean, String) = SQL("SELECT a, b FROM test")
+   *   .as(SqlParser.bool(1) ~ SqlParser.str("b") map (
+   *     SqlParser.flatten) single)
+   * }}}
+   */
+  def bool(columnPosition: Int)(implicit c: Column[Boolean]): RowParser[Boolean] = get[Boolean](columnPosition)(c)
 
   /**
    * Parses specified column as byte.
@@ -94,7 +140,23 @@ object SqlParser {
    *     SqlParser.flatten) single)
    * }}}
    */
-  def byte(columnName: String): RowParser[Byte] = get[Byte](columnName)(implicitly[Column[Byte]])
+  def byte(columnName: String)(implicit c: Column[Byte]): RowParser[Byte] =
+    get[Byte](columnName)(c)
+
+  /**
+   * Parses specified column as byte.
+   * @param columnPosition from 1 to n
+   *
+   * {{{
+   * import anorm.{ SQL, SqlParser }
+   *
+   * val t: (Byte, String) = SQL("SELECT a, b FROM test")
+   *   .as(SqlParser.byte(1) ~ SqlParser.str("b") map (
+   *     SqlParser.flatten) single)
+   * }}}
+   */
+  def byte(columnPosition: Int)(implicit c: Column[Byte]): RowParser[Byte] =
+    get[Byte](columnPosition)(c)
 
   /**
    * Parses specified column as double.
@@ -107,7 +169,21 @@ object SqlParser {
    *     SqlParser.flatten) single)
    * }}}
    */
-  def double(columnName: String): RowParser[Double] = get[Double](columnName)(implicitly[Column[Double]])
+  def double(columnName: String)(implicit c: Column[Double]): RowParser[Double] = get[Double](columnName)(c)
+
+  /**
+   * Parses specified column as double.
+   * @param columnPosition from 1 to n
+   *
+   * {{{
+   * import anorm.{ SQL, SqlParser }
+   *
+   * val t: (Double, String) = SQL("SELECT a, b FROM test")
+   *   .as(SqlParser.double(1) ~ SqlParser.str("b") map (
+   *     SqlParser.flatten) single)
+   * }}}
+   */
+  def double(columnPosition: Int)(implicit c: Column[Double]): RowParser[Double] = get[Double](columnPosition)(c)
 
   /**
    * Parses specified column as short.
@@ -120,7 +196,23 @@ object SqlParser {
    *     SqlParser.flatten) single)
    * }}}
    */
-  def short(columnName: String): RowParser[Short] = get[Short](columnName)(implicitly[Column[Short]])
+  def short(columnName: String)(implicit c: Column[Short]): RowParser[Short] =
+    get[Short](columnName)(c)
+
+  /**
+   * Parses specified column as short.
+   * @param columnPosition from 1 to n
+   *
+   * {{{
+   * import anorm.{ SQL, SqlParser }
+   *
+   * val t: (Short, String) = SQL("SELECT a, b FROM test")
+   *   .as(SqlParser.short(1) ~ SqlParser.str("b") map (
+   *     SqlParser.flatten) single)
+   * }}}
+   */
+  def short(columnPosition: Int)(implicit c: Column[Short]): RowParser[Short] =
+    get[Short](columnPosition)(c)
 
   /**
    * Parses specified column as integer.
@@ -133,7 +225,23 @@ object SqlParser {
    *     SqlParser.flatten) single)
    * }}}
    */
-  def int(columnName: String): RowParser[Int] = get[Int](columnName)(implicitly[Column[Int]])
+  def int(columnName: String)(implicit c: Column[Int]): RowParser[Int] =
+    get[Int](columnName)(c)
+
+  /**
+   * Parses specified column as integer.
+   * @param columnPosition from 1 to n
+   *
+   * {{{
+   * import anorm.{ SQL, SqlParser }
+   *
+   * val t: (Int, String) = SQL("SELECT a, b FROM test")
+   *   .as(SqlParser.int(1) ~ SqlParser.str("b") map (
+   *     SqlParser.flatten) single)
+   * }}}
+   */
+  def int(columnPosition: Int)(implicit c: Column[Int]): RowParser[Int] =
+    get[Int](columnPosition)(c)
 
   /**
    * Parses specified column as long.
@@ -146,7 +254,23 @@ object SqlParser {
    *     SqlParser.flatten) single)
    * }}}
    */
-  def long(columnName: String): RowParser[Long] = get[Long](columnName)(implicitly[Column[Long]])
+  def long(columnName: String)(implicit c: Column[Long]): RowParser[Long] =
+    get[Long](columnName)(c)
+
+  /**
+   * Parses specified column as long.
+   * @param columnPosition from 1 to n
+   *
+   * {{{
+   * import anorm.{ SQL, SqlParser }
+   *
+   * val t: (Long, String) = SQL("SELECT a, b FROM test")
+   *   .as(SqlParser.long(1) ~ SqlParser.str("b") map (
+   *     SqlParser.flatten) single)
+   * }}}
+   */
+  def long(columnPosition: Int)(implicit c: Column[Long]): RowParser[Long] =
+    get[Long](columnPosition)(c)
 
   /**
    * Parses specified column as date.
@@ -159,35 +283,101 @@ object SqlParser {
    *     SqlParser.flatten) single)
    * }}}
    */
-  def date(columnName: String): RowParser[Date] = get[Date](columnName)(implicitly[Column[Date]])
+  def date(columnName: String)(implicit c: Column[Date]): RowParser[Date] =
+    get[Date](columnName)(c)
+
+  /**
+   * Parses specified column as date.
+   * @param columnPosition from 1 to n
+   *
+   * {{{
+   * import anorm.{ SQL, SqlParser }
+   *
+   * val t: (Date, String) = SQL("SELECT a, b FROM test")
+   *   .as(SqlParser.date(1) ~ SqlParser.str("b") map (
+   *     SqlParser.flatten) single)
+   * }}}
+   */
+  def date(columnPosition: Int)(implicit c: Column[Date]): RowParser[Date] =
+    get[Date](columnPosition)(c)
 
   def getAliased[T](aliasName: String)(implicit extractor: Column[T]): RowParser[T] = RowParser { row =>
-    import MayErr._
-
     (for {
-      meta <- row.metaData.getAliased(aliasName)
-        .toRight(ColumnNotFound(aliasName, row.metaData.availableColumns))
-      value <- row.getAliased(aliasName)
-      result <- extractor(value, MetaDataItem(meta._1, meta._2, meta._3))
-    } yield result).fold(e => Error(e), a => Success(a))
+      col <- row.getAliased(aliasName)
+      res <- extractor.tupled(col)
+    } yield res).fold(Error(_), Success(_))
   }
 
-  def get[T](columnName: String)(implicit extractor: Column[T]): RowParser[T] = RowParser { row =>
-    import MayErr._
+  // TODO: Scaladoc
+  def get[T](columnName: String)(implicit extractor: Column[T]): RowParser[T] =
+    RowParser { row =>
+      (for {
+        col <- row.get1(columnName)
+        res <- extractor.tupled(col)
+      } yield res).fold(Error(_), Success(_))
+    }
 
-    (for {
-      meta <- row.metaData.get(columnName)
-        .toRight(ColumnNotFound(columnName, row.metaData.availableColumns))
-      value <- row.get1(columnName)
-      result <- extractor(value, MetaDataItem(meta._1, meta._2, meta._3))
-    } yield result).fold(e => Error(e), a => Success(a))
-  }
+  /**
+   * Returns row parser for column at given position.
+   * @param position Column position, from 1 to n
+   *
+   * {{{
+   * val res: (Float, String) = // parsing columns #1 & #3
+   *   SQL("SELECT * FROM Test").as(get[String](1) ~ get[Float](3) map {
+   *     case str ~ f => (f -> str)
+   *   } *)
+   * }}}
+   */
+  def get[T](position: Int)(implicit extractor: Column[T]): RowParser[T] =
+    RowParser { row =>
+      (for {
+        col <- row.getIndexed(position - 1)
+        result <- extractor.tupled(col)
+      } yield result).fold(e => Error(e), a => Success(a))
+    }
 
-  def contains[TT: Column, T <: TT](columnName: String, t: T): RowParser[Unit] =
-    get[TT](columnName)(implicitly[Column[TT]]).
-      collect(s"Row doesn't contain a column: $columnName with value $t") {
-        case a if a == t => Unit
+  /**
+   * Returns row parser which throws exception if specified `column` is either
+   * missing or not matching expected `value`.
+   * If row contains described column, do nothing (Unit).
+   *
+   * {{{
+   * import anorm.SQL
+   * import anorm.SqlParser.{ contains, str }
+   *
+   * val parser = contains("a", true) ~ str("b") map {
+   *   case () ~ str => str
+   * }
+   *
+   * SQL("SELECT * FROM table").as(parser.+)
+   * // Throws exception if there no |a| column or if |a| is not true,
+   * // otherwise parses as non-empty list of |b| strings.
+   * }}}
+   */
+  @throws[RuntimeException](
+    "SqlMappingError(Row doesn't contain a column: f with value 2.34)")
+  @deprecated(message = "Use [[matches]]", since = "2.3.0")
+  def contains[TT: Column, T <: TT](column: String, value: T): RowParser[Unit] =
+    get[TT](column)(implicitly[Column[TT]]).
+      collect(s"Row doesn't contain a column: $column with value $value") {
+        case a if a == value => Unit
       }
+
+  /**
+   * Returns row parser which true if specified `column` is found
+   * and matching expected `value`.
+   *
+   * {{{
+   * import anorm.SQL
+   * import anorm.SqlParser.matches
+   *
+   * val m: Boolean = SQL("SELECT * FROM table").as(matches("a", 1.2f).single)
+   * // true if column |a| is found and matching 1.2f, otherwise false
+   * }}}
+   *
+   * @return true if matches, or false if not
+   */
+  def matches[TT: Column, T <: TT](column: String, value: T)(implicit c: Column[TT]): RowParser[Boolean] = get[TT](column)(c).?.map(_.fold(false)(_ == value))
 
 }
 
@@ -205,19 +395,25 @@ trait RowParser[+A] extends (Row => SqlResult[A]) { parent =>
 
   def map[B](f: A => B): RowParser[B] = RowParser(parent.andThen(_.map(f)))
 
+  /**
+   * Returns parser which collects information
+   * from already parsed row data using `f`.
+   *
+   * @param otherwise Message returned as error if nothing can be collected using `f`.
+   * @param f Collecting function
+   */
   def collect[B](otherwise: String)(f: PartialFunction[A, B]): RowParser[B] =
-    RowParser(row => parent(row).flatMap(a =>
-      if (f.isDefinedAt(a)) Success(f(a))
-      else Error(SqlMappingError(otherwise))))
+    RowParser(parent(_).flatMap(f.lift(_).
+      fold[SqlResult[B]](Error(SqlMappingError(otherwise)))(Success(_))))
 
   def flatMap[B](k: A => RowParser[B]): RowParser[B] =
-    RowParser(row => parent(row).flatMap(a => k(a)(row)))
+    RowParser(row => parent(row).flatMap(k(_)(row)))
 
   def ~[B](p: RowParser[B]): RowParser[A ~ B] =
     RowParser(row => parent(row).flatMap(a => p(row).map(new ~(a, _))))
 
   def ~>[B](p: RowParser[B]): RowParser[B] =
-    RowParser(row => parent(row).flatMap(a => p(row)))
+    RowParser(row => parent(row).flatMap(_ => p(row)))
 
   def <~[B](p: RowParser[B]): RowParser[A] = parent.~(p).map(_._1)
 
@@ -232,8 +428,8 @@ trait RowParser[+A] extends (Row => SqlResult[A]) { parent =>
    * Returns a row parser for optional column,
    * that will turn missing or null column as None.
    */
-  def ? : RowParser[Option[A]] = RowParser { row =>
-    parent(row) match {
+  def ? : RowParser[Option[A]] = RowParser {
+    parent(_) match {
       case Success(a) => Success(Some(a))
       case Error(UnexpectedNullableFound(_)) | Error(ColumnNotFound(_, _)) =>
         Success(None)
@@ -243,8 +439,28 @@ trait RowParser[+A] extends (Row => SqlResult[A]) { parent =>
 
   def >>[B](f: A => RowParser[B]): RowParser[B] = flatMap(f)
 
+  /**
+   * Returns possibly empty list parsed from result.
+   *
+   * {{{
+   * val price = 125
+   * SQL"SELECT name FROM item WHERE price < $price".as(scalar[String].*)
+   * }}}
+   */
   def * : ResultSetParser[List[A]] = ResultSetParser.list(parent)
 
+  /**
+   * Returns non empty list parse from result,
+   * or raise error if there is no result.
+   *
+   * {{{
+   * import anorm.SQL
+   * import anorm.SqlParser.str
+   *
+   * val parser = str("title") ~ str("descr")
+   * SQL("SELECT title, descr FROM pages").as(parser.+) // at least 1 page
+   * }}}
+   */
   def + : ResultSetParser[List[A]] = ResultSetParser.nonEmptyList(parent)
 
   /**
@@ -270,6 +486,7 @@ trait RowParser[+A] extends (Row => SqlResult[A]) { parent =>
 
 }
 
+/** Parser for scalar row (row of one single column). */
 sealed trait ScalarRowParser[+A] extends RowParser[A] {
   override def singleOpt: ResultSetParser[Option[A]] = ResultSetParser {
     case head #:: Stream.Empty if (head.data.headOption == Some(null)) =>
@@ -277,7 +494,8 @@ sealed trait ScalarRowParser[+A] extends RowParser[A] {
       Success(None)
     case head #:: Stream.Empty => map(Some(_))(head)
     case Stream.Empty => Success(None)
-    case _ => Error(SqlMappingError("too many rows when expecting a single one"))
+    case _ => Error(SqlMappingError(
+      "too many rows when expecting a single one"))
   }
 }
 
@@ -287,7 +505,7 @@ trait ResultSetParser[+A] extends (ResultSet => SqlResult[A]) { parent =>
 
 }
 
-object ResultSetParser {
+private[anorm] object ResultSetParser {
   def apply[A](f: ResultSet => SqlResult[A]): ResultSetParser[A] =
     new ResultSetParser[A] { rows =>
       def apply(rows: ResultSet): SqlResult[A] = f(rows)
@@ -316,10 +534,11 @@ object ResultSetParser {
 
   def single[A](p: RowParser[A]): ResultSetParser[A] = ResultSetParser {
     case head #:: Stream.Empty => p(head)
-    case Stream.Empty =>
-      Error(SqlMappingError("No rows when expecting a single one"))
-    case _ =>
-      Error(SqlMappingError("too many rows when expecting a single one"))
+    case Stream.Empty => Error(SqlMappingError(
+      "No rows when expecting a single one"))
+
+    case _ => Error(SqlMappingError(
+      "too many rows when expecting a single one"))
 
   }
 
@@ -327,7 +546,8 @@ object ResultSetParser {
     ResultSetParser {
       case head #:: Stream.Empty => p.map(Some(_))(head)
       case Stream.Empty => Success(None)
-      case _ => Error(SqlMappingError("too many rows when expecting a single one"))
+      case _ => Error(SqlMappingError(
+        "too many rows when expecting a single one"))
     }
 
 }

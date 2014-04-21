@@ -62,6 +62,12 @@ package scalaguide.http.scalaresults {
         val result2 = result.discardingCookies(DiscardingCookie("theme"))
         //#discarding-cookies
         testHeader(result2, SET_COOKIE, "theme=;")
+        //#setting-discarding-cookies
+        val result3 = result.withCookies(Cookie("theme", "blue")).discardingCookies(DiscardingCookie("skin"))
+        //#setting-discarding-cookies
+        testHeader(result3, SET_COOKIE, "skin=;")
+        testHeader(result3, SET_COOKIE, "theme=blue;")
+        
       }
 
       "Changing the charset for text based HTTP responses" in {
@@ -75,11 +81,11 @@ package scalaguide.http.scalaresults {
       }
     }
 
-    def testContentType(results: SimpleResult, contentType: String) = {
+    def testContentType(results: Result, contentType: String) = {
       testHeader(results, HeaderNames.CONTENT_TYPE, contentType)
     }
 
-    def testHeader(results: SimpleResult, key: String, value: String) = {
+    def testHeader(results: Result, key: String, value: String) = {
       results.header.headers.get(key).get must contain(value)
     }
 
@@ -87,7 +93,7 @@ package scalaguide.http.scalaresults {
       assertAction(action, expectedResponse, request) { result => success }
     }
 
-    def assertAction[A, T: AsResult](action: Action[A], expectedResponse: Int = OK, request: Request[A] = FakeRequest())(assertions: Future[SimpleResult] => T) = {
+    def assertAction[A, T: AsResult](action: Action[A], expectedResponse: Int = OK, request: Request[A] = FakeRequest())(assertions: Future[Result] => T) = {
       running(FakeApplication()) {
         val result = action(request)
         status(result) must_== expectedResponse

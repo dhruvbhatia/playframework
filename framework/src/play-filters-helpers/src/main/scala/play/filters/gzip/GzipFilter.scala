@@ -6,8 +6,6 @@ package play.filters.gzip
 import play.api.libs.iteratee._
 import play.api.mvc._
 import scala.concurrent.Future
-import play.api.mvc.SimpleResult
-import play.api.mvc.ResponseHeader
 import play.api.mvc.RequestHeader.acceptHeader
 import org.jboss.netty.handler.codec.http.HttpHeaders.Names
 import play.api.http.{ Status, MimeTypes }
@@ -76,11 +74,11 @@ class GzipFilter(gzip: Enumeratee[Array[Byte], Array[Byte]] = Gzip.gzip(GzipFilt
     }
   }
 
-  private def handleResult(request: RequestHeader, result: SimpleResult): Future[SimpleResult] = {
+  private def handleResult(request: RequestHeader, result: Result): Future[Result] = {
     if (shouldCompress(result.header) && shouldGzip(request, result.header)) {
       // If connection is close, don't bother buffering it, we can send it without a content length
       if (result.connection == HttpConnection.Close) {
-        Future.successful(SimpleResult(
+        Future.successful(Result(
           header = result.header.copy(headers = setupHeader(result.header.headers)),
           body = result.body &> gzip,
           connection = result.connection
@@ -92,7 +90,7 @@ class GzipFilter(gzip: Enumeratee[Array[Byte], Array[Byte]] = Gzip.gzip(GzipFilt
         // right means we did buffer it before reaching the threshold, and contains the chunks and the length of data
         def buffer(chunks: List[Array[Byte]], count: Int): Iteratee[Array[Byte], Either[List[Array[Byte]], (List[Array[Byte]], Int)]] = {
           Cont {
-            case Input.EOF => Done(Right((chunks.reverse, count)))
+            case Input.EOF => Done(Right((chunks.reverse, count)), Input.EOF)
             // If we have 10 or less bytes already, then we have so far only seen the gzip header
             case Input.El(data) if count <= GzipFilter.GzipHeaderLength || count + data.length < chunkedThreshold =>
               buffer(data :: chunks, count + data.length)
@@ -104,25 +102,27 @@ class GzipFilter(gzip: Enumeratee[Array[Byte], Array[Byte]] = Gzip.gzip(GzipFilt
         // Run the enumerator partially (means we get an enumerator that contains the rest of the input)
         Concurrent.runPartial(result.body &> gzip, buffer(Nil, 0)).map {
           // We successfully buffered the whole thing, so we have a content length
-          case (Right((chunks, contentLength)), _) =>
-            SimpleResult(
+          case (Right((chunks, contentLength)), empty) =>
+            Result(
               header = result.header.copy(headers = setupHeader(result.header.headers)
                 + (CONTENT_LENGTH -> Integer.toString(contentLength))),
-              body = Enumerator.enumerate(chunks),
+              // include the empty enumerator so that it's fully consumed
+              // needed by New Relic monitoring, which tracks all promises within a request
+              body = Enumerator.enumerate(chunks) >>> empty,
               connection = result.connection
             )
           // We still had some input remaining
           case (Left(chunks), remaining) => {
             if (request.version == HTTP_1_0) {
               // Don't chunk for HTTP/1.0
-              SimpleResult(
+              Result(
                 header = result.header.copy(headers = setupHeader(result.header.headers)),
                 body = Enumerator.enumerate(chunks) >>> remaining,
                 connection = HttpConnection.Close
               )
             } else {
               // Otherwise chunk
-              SimpleResult(
+              Result(
                 header = result.header.copy(headers = setupHeader(result.header.headers)
                   + (TRANSFER_ENCODING -> CHUNKED)),
                 body = (Enumerator.enumerate(chunks) >>> remaining) &> Results.chunk,
@@ -185,7 +185,17 @@ class GzipFilter(gzip: Enumeratee[Array[Byte], Array[Byte]] = Gzip.gzip(GzipFilt
   private def isNotAlreadyCompressed(header: ResponseHeader) = header.headers.get(Names.CONTENT_ENCODING).isEmpty
 
   private def setupHeader(header: Map[String, String]): Map[String, String] = {
-    header.filterNot(_._1 == Names.CONTENT_LENGTH) + (Names.CONTENT_ENCODING -> "gzip") + (Names.VARY -> Names.ACCEPT_ENCODING)
+    header.filterNot(_._1 == Names.CONTENT_LENGTH) + (Names.CONTENT_ENCODING -> "gzip") + addToVaryHeader(header, Names.VARY, Names.ACCEPT_ENCODING)
+  }
+
+  /**
+   * There may be an existing Vary value, which we must add to (comma separated)
+   */
+  private def addToVaryHeader(existingHeaders: Map[String, String], headerName: String, headerValue: String): (String, String) = {
+    existingHeaders.get(headerName) match {
+      case None => (headerName, headerValue)
+      case Some(existing) => (headerName, s"$existing,$headerValue")
+    }
   }
 }
 

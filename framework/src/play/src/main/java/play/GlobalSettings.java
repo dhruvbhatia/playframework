@@ -39,8 +39,8 @@ public class GlobalSettings {
 
     /**
      * Called when an exception occurred.
-     * 
-     * The default is to send the framework's default error page. This is achieved by returning <code>null</code>, 
+     *
+     * The default is to send the framework's default error page. This is achieved by returning <code>null</code>,
      * so that the Scala engine handles the excepetion and shows an error page.
      *
      * By overriding this method one can provide an alternative error page.
@@ -48,10 +48,10 @@ public class GlobalSettings {
      * @param t is any throwable
      * @return null as the default implementation
      */
-    public F.Promise<SimpleResult> onError(RequestHeader request, Throwable t) {
+    public F.Promise<Result> onError(RequestHeader request, Throwable t) {
         return null;
     }
-    
+
     /**
      * Call to create the root Action of a request for a Java application.
      * The request and actionMethod values are passed for information.
@@ -63,7 +63,7 @@ public class GlobalSettings {
     @SuppressWarnings("rawtypes")
     public Action onRequest(Request request, Method actionMethod) {
         return new Action.Simple() {
-            public F.Promise<SimpleResult> call(Context ctx) throws Throwable {
+            public F.Promise<Result> call(Context ctx) throws Throwable {
                 return delegate.call(ctx);
             }
         };
@@ -72,11 +72,11 @@ public class GlobalSettings {
     /**
     *
     * Called when an HTTP request has been received.
-    * The default implementation (return null) means to use the application router to find the appropriate action 
-    * 
-    * By overriding this method one can provide an alternative routing mechanism. 
+    * The default implementation (return null) means to use the application router to find the appropriate action
+    *
+    * By overriding this method one can provide an alternative routing mechanism.
     * Please note, though, this API is very low level, useful for plugin/module authors only.
-    * 
+    *
     * @param request the HTTP request header as seen by the core framework (the body has not been parsed yet)
     * @return an action to handle this request - if no action is returned, a 404 not found result will be sent to client
     */
@@ -87,22 +87,22 @@ public class GlobalSettings {
     /**
      * Called when no action was found to serve a request.
      *
-     * The default behavior is to render the framework's default 404 page. This is achieved by returning <code>null</code>, 
-     * so that the Scala engine handles <code>onHandlerNotFound</code>. 
+     * The default behavior is to render the framework's default 404 page. This is achieved by returning <code>null</code>,
+     * so that the Scala engine handles <code>onHandlerNotFound</code>.
      *
      * By overriding this method one can provide an alternative 404 page.
      *
      * @param request the HTTP request
      * @return null in the default implementation, you can return your own custom Result in your Global class.
      */
-    public F.Promise<SimpleResult> onHandlerNotFound(RequestHeader request) {
+    public F.Promise<Result> onHandlerNotFound(RequestHeader request) {
         return null;
     }
-    
+
     /**
      * Called when an action has been found, but the request parsing has failed.
      *
-     * The default behavior is to render the framework's default 400 page. This is achieved by returning <code>null</code>, 
+     * The default behavior is to render the framework's default 400 page. This is achieved by returning <code>null</code>,
      * so that the Scala engine handles <code>onBadRequest</code>.
      *
      * By overriding this method one can provide an alternative 400 page.
@@ -110,7 +110,7 @@ public class GlobalSettings {
      * @param request the HTTP request
      * @return null in the default implementation, you can return your own custom Result in your Global class.
      */
-    public F.Promise<SimpleResult> onBadRequest(RequestHeader request, String error) {
+    public F.Promise<Result> onBadRequest(RequestHeader request, String error) {
         return null;
     }
 
@@ -137,10 +137,23 @@ public class GlobalSettings {
     }
 
     /**
+     * Called just after configuration has been loaded, to give the application an opportunity to modify it.
+     *
+     * @param config the loaded configuration
+     * @param path the application path
+     * @param classloader The applications classloader
+     * @param mode The mode of the application
+     * @return The configuration that the application should use
+     */
+    public Configuration onLoadConfig(Configuration config, File path, ClassLoader classloader, Mode mode) {
+        return onLoadConfig(config, path, classloader);
+    }
+
+    /**
      * Get the filters that should be used to handle each request.
      */
     public <T extends play.api.mvc.EssentialFilter> Class<T>[] filters() {
         return new Class[0];
     }
-    
+
 }

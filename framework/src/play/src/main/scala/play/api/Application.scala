@@ -39,7 +39,8 @@ trait WithDefaultGlobal {
   } catch {
     case e: ClassNotFoundException if !initialConfiguration.getString("application.global").isDefined => DefaultGlobal
     case e if initialConfiguration.getString("application.global").isDefined => {
-      throw initialConfiguration.reportError("application.global", "Cannot initialize the custom Global object (%s) (perhaps it's a wrong reference?)", Some(e))
+      throw initialConfiguration.reportError("application.global",
+        s"Cannot initialize the custom Global object ($globalClass) (perhaps it's a wrong reference?)", Some(e))
     }
   }
 
@@ -148,7 +149,7 @@ trait WithDefaultPlugins {
             case e: ThreadDeath => throw e
             case e: Throwable => throw new PlayException(
               "Cannot load plugin",
-              "Plugin [" + className + "] cannot been instantiated.",
+              "Plugin [" + className + "] cannot be instantiated.",
               e)
           }
         }
@@ -161,7 +162,7 @@ trait WithDefaultPlugins {
         case e: VirtualMachineError => throw e
         case e: Throwable => throw new PlayException(
           "Cannot load plugin",
-          "Plugin [" + className + "] cannot been instantiated.",
+          "Plugin [" + className + "] cannot be instantiated.",
           e)
       }
     }.flatten
@@ -286,7 +287,7 @@ trait Application {
   /**
    * Handle a runtime error during the execution of an action
    */
-  private[play] def handleError(request: RequestHeader, e: Throwable): Future[SimpleResult] = try {
+  private[play] def handleError(request: RequestHeader, e: Throwable): Future[Result] = try {
     e match {
       case e: UsefulException => throw e
       case e: ExecutionException => handleError(request, e.getCause)

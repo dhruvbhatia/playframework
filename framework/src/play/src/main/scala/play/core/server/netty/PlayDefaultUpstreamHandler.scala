@@ -7,6 +7,7 @@ import org.jboss.netty.channel._
 import org.jboss.netty.handler.codec.http._
 import org.jboss.netty.handler.codec.http.HttpHeaders._
 import org.jboss.netty.handler.codec.http.HttpHeaders.Names._
+import org.jboss.netty.handler.codec.frame.TooLongFrameException
 import org.jboss.netty.handler.ssl._
 
 import org.jboss.netty.channel.group._
@@ -22,8 +23,9 @@ import scala.collection.JavaConverters._
 import scala.util.control.Exception
 import com.typesafe.netty.http.pipelining.{ OrderedDownstreamChannelEvent, OrderedUpstreamMessageEvent }
 import scala.concurrent.Future
-import java.net.{ SocketAddress, URI }
+import java.net.URI
 import java.io.IOException
+import org.jboss.netty.handler.codec.http.websocketx.CloseWebSocketFrame
 
 private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: DefaultChannelGroup) extends SimpleChannelUpstreamHandler with WebSocketHandler with RequestBodyHandler {
 
@@ -37,13 +39,23 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
   val nettyExceptionLogger = Logger("play.nettyException")
 
   override def exceptionCaught(ctx: ChannelHandlerContext, event: ExceptionEvent) {
+
     event.getCause match {
       // IO exceptions happen all the time, it usually just means that the client has closed the connection before fully
       // sending/receiving the response.
-      case e: IOException => nettyExceptionLogger.trace("Benign IO exception caught in Netty", e)
-      case e => nettyExceptionLogger.error("Exception caught in Netty", e)
+      case e: IOException =>
+        nettyExceptionLogger.trace("Benign IO exception caught in Netty", e)
+        event.getChannel.close()
+      case e: TooLongFrameException =>
+        nettyExceptionLogger.warn("Handling TooLongFrameException", e)
+        val response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.REQUEST_URI_TOO_LONG)
+        response.headers().set(Names.CONNECTION, "close")
+        ctx.getChannel.write(response).addListener(ChannelFutureListener.CLOSE)
+      case e =>
+        nettyExceptionLogger.error("Exception caught in Netty", e)
+        event.getChannel.close()
     }
-    event.getChannel.close()
+
   }
 
   override def channelConnected(ctx: ChannelHandlerContext, e: ChannelStateEvent) {
@@ -121,7 +133,7 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
           untaggedRequestHeader
         }
 
-        val (requestHeader, handler: Either[Future[SimpleResult], (Handler, Application)]) = Exception
+        val (requestHeader, handler: Either[Future[Result], (Handler, Application)]) = Exception
           .allCatch[RequestHeader].either {
             val rh = tryToCreateRequest
             // Force parsing of uri
@@ -164,7 +176,7 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
         implicit val msgCtx = ctx
         implicit val oue = e.asInstanceOf[OrderedUpstreamMessageEvent]
 
-        def cleanFlashCookie(result: SimpleResult): SimpleResult = {
+        def cleanFlashCookie(result: Result): Result = {
           val header = result.header
 
           val flashCookie = {
@@ -191,15 +203,34 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
                 case error =>
                   Iteratee.flatten(
                     app.handleError(requestHeader, error).map(result => Done(result, Input.Empty))
-                  ): Iteratee[Array[Byte], SimpleResult]
+                  ): Iteratee[Array[Byte], Result]
               })
             }
             handleAction(a, Some(app))
 
-          case Right((ws @ WebSocket(f), app)) if (websocketableRequest.check) =>
+          case Right((ws @ WebSocket(f), app)) if websocketableRequest.check =>
             Play.logger.trace("Serving this request with: " + ws)
-            val enumerator = websocketHandshake(ctx, nettyHttpRequest, e)(ws.frameFormatter)
-            f(requestHeader)(enumerator, socketOut(ctx)(ws.frameFormatter))
+
+            val executed = Future(f(requestHeader))(play.api.libs.concurrent.Execution.defaultContext)
+
+            import play.api.libs.iteratee.Execution.Implicits.trampoline
+            executed.flatMap(identity).map {
+              case Left(result) =>
+                // WebSocket was rejected, send result
+                val a = EssentialAction(_ => Done(result, Input.Empty))
+                handleAction(a, Some(app))
+              case Right(socket) =>
+                val bufferLimit = app.configuration.getBytes("play.websocket.buffer.limit").getOrElse(65536L)
+
+                val enumerator = websocketHandshake(ctx, nettyHttpRequest, e, bufferLimit)(ws.inFormatter)
+                socket(enumerator, socketOut(ctx)(ws.outFormatter))
+            }.recover {
+              case error =>
+                app.handleError(requestHeader, error).map { result =>
+                  val a = EssentialAction(_ => Done(result, Input.Empty))
+                  handleAction(a, Some(app))
+                }
+            }
 
           //handle bad websocket request
           case Right((WebSocket(_), app)) =>
@@ -230,7 +261,7 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
           // Netty thread, so that the handler is replaced in this thread, so that if the client does start sending
           // body chunks (which it might according to the HTTP spec if we're slow to respond), we can handle them.
 
-          val eventuallyResult: Future[SimpleResult] = if (nettyHttpRequest.isChunked) {
+          val eventuallyResult: Future[Result] = if (nettyHttpRequest.isChunked) {
 
             val pipeline = ctx.getChannel.getPipeline
             val result = newRequestBodyUpstreamHandler(bodyParser, { handler =>
@@ -258,7 +289,7 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
 
           // An iteratee containing the result and the sequence number.
           // Sequence number will be 1 if a 100 continue response has been sent, otherwise 0.
-          val eventuallyResultWithSequence: Future[(SimpleResult, Int)] = expectContinue match {
+          val eventuallyResultWithSequence: Future[(Result, Int)] = expectContinue match {
             case Some(_) => {
               bodyParser.unflatten.flatMap {
                 case Step.Cont(k) =>
@@ -307,23 +338,32 @@ private[play] class PlayDefaultUpstreamHandler(server: Server, allChannels: Defa
   }
 
   def socketOut[A](ctx: ChannelHandlerContext)(frameFormatter: play.api.mvc.WebSocket.FrameFormatter[A]): Iteratee[A, Unit] = {
-    val channel = ctx.getChannel()
+    import play.api.libs.iteratee.Execution.Implicits.trampoline
+
+    val channel = ctx.getChannel
     val nettyFrameFormatter = frameFormatter.asInstanceOf[play.core.server.websocket.FrameFormatter[A]]
 
-    def step(future: Option[ChannelFuture])(input: Input[A]): Iteratee[A, Unit] =
-      input match {
-        case El(e) => Cont(step(Some(channel.write(nettyFrameFormatter.toFrame(e)))))
-        case e @ EOF =>
-          future.map(_.addListener(ChannelFutureListener.CLOSE)).getOrElse(channel.close()); Done((), e)
-        case Empty => Cont(step(future))
-      }
+    import NettyFuture._
 
-    import play.api.libs.iteratee.Execution.Implicits.trampoline
-    Enumeratee.breakE[A](_ => !channel.isConnected()).transform(Cont(step(None)))
+    def iteratee: Iteratee[A, _] = Cont {
+      case El(e) =>
+        val frame = nettyFrameFormatter.toFrame(e)
+        Iteratee.flatten(channel.write(frame).toScala.map(_ => iteratee))
+      case e @ EOF =>
+        if (channel.isOpen) {
+          Iteratee.flatten(for {
+            _ <- channel.write(new CloseWebSocketFrame(WebSocketNormalClose, "")).toScala
+            _ <- channel.close().toScala
+          } yield Done((), e))
+        } else Done((), e)
+      case Empty => iteratee
+    }
+
+    iteratee.map(_ => ())
   }
 
   def getHeaders(nettyRequest: HttpRequest): Headers = {
-    val pairs = nettyRequest.getHeaders.asScala.groupBy(_.getKey).mapValues(_.map(_.getValue))
+    val pairs = nettyRequest.headers().entries().asScala.groupBy(_.getKey).mapValues(_.map(_.getValue))
     new Headers { val data = pairs.toSeq }
   }
 

@@ -18,6 +18,7 @@ import java.net.MalformedURLException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * A WS response.
@@ -52,6 +53,14 @@ public class NingWSResponse implements WSResponse {
     }
 
     /**
+     * Get all the HTTP headers of the response as a case-insensitive map
+     */
+    @Override
+    public Map<String, List<String>> getAllHeaders() {
+        return ahcResponse.getHeaders();
+    }
+
+    /**
      * Get the given HTTP header of the response
      */
     @Override
@@ -65,7 +74,7 @@ public class NingWSResponse implements WSResponse {
     @Override
     public List<WSCookie> getCookies() {
         List<WSCookie> cookieList = new ArrayList<WSCookie>();
-        for (com.ning.http.client.Cookie ahcCookie : ahcResponse.getCookies()) {
+        for (com.ning.http.client.cookie.Cookie ahcCookie : ahcResponse.getCookies()) {
             cookieList.add(new NingWSCookie(ahcCookie));
         }
         return cookieList;
@@ -76,7 +85,7 @@ public class NingWSResponse implements WSResponse {
      */
     @Override
     public WSCookie getCookie(String name) {
-        for (com.ning.http.client.Cookie ahcCookie : ahcResponse.getCookies()) {
+        for (com.ning.http.client.cookie.Cookie ahcCookie : ahcResponse.getCookies()) {
             // safe -- cookie.getName() will never return null
             if (ahcCookie.getName().equals(name)) {
                 return new NingWSCookie(ahcCookie);

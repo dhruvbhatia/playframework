@@ -73,6 +73,10 @@
 * **Website (docs, sample):** <https://github.com/typesafehub/play-plugins/tree/master/dust>
 * **Short description:** provides support for the dust client side template language
 
+## Google Closure Template Plugin
+* **Website (docs, sample):** [https://github.com/gawkermedia/play2-closure](https://github.com/gawkermedia/play2-closure)
+* **Short description:** provides support for Google Closure Templates
+
 ## Elasticsearch
 
 * **Website:** <https://github.com/cleverage/play2-elasticsearch>
@@ -105,6 +109,11 @@
 * **Documentation:** <https://github.com/blabluble/play-geolocation-module/blob/master/README.md>
 * **Short description:** Module for retrieve Geolocation data based on IP.
 
+## Google's HTML Compressor (Java and Scala)
+* **Website:** <https://github.com/mohiva/play-html-compressor>
+* **Documentation:** <https://github.com/mohiva/play-html-compressor/blob/master/README.md>
+* **Short description:** Google's HTML Compressor for Play 2.
+
 ## Groovy Templates plugin
 
 * **Website:** <https://github.com/manuelbernhardt/play2-groovy-templates>
@@ -125,7 +134,7 @@
 ## HTML5 Tags module (Java and Scala)
 * **Website:** <https://github.com/loicdescotte/Play2-HTML5Tags>
 * **Documentation:** <https://github.com/loicdescotte/Play2-HTML5Tags/blob/master/README.md>
-* **Short description:** This tags add client side validation capabilities, based on model contraints (e.g required, email pattern, max|min lentgh...) and specific input fields (date, telephone number, url...) to Play templates
+* **Short description:** This tags add client side validation capabilities, based on model constraints (e.g required, email pattern, max|min lentgh...) and specific input fields (date, telephone number, url...) to Play templates
 
 ## InputValidator (Scala)
 
@@ -144,7 +153,7 @@
 
 ## JsMessages
 
-* **Wesite:** <https://github.com/julienrf/play-jsmessages>
+* **Website:** <https://github.com/julienrf/play-jsmessages>
 * **Short description:** Allows to compute localized messages on client side.
 
 ## JSON minification Plugin
@@ -172,6 +181,12 @@
 
 * **Website:** <https://github.com/mumoshu/play2-memcached>
 * **Short description:** provides a memcached based cache implementation
+
+## Messages Compiler Plugin (Scala)
+
+* **Website:** <https://github.com/tegonal/play-messagescompiler>
+* **Documentation:** <https://github.com/tegonal/play-messagescompiler/blob/master/readme.md>
+* **Short description:** Provides type safety for the project's messages.
 
 ## MongoDB Jackson Mapper Plugin (Java)
 

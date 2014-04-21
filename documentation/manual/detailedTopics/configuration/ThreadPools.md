@@ -31,9 +31,8 @@ In contrast, the following types of IO do not block:
 Play uses a number of different thread pools for different purposes:
 
 * **Netty boss/worker thread pools** - These are used internally by Netty for handling Netty IO.  An applications code should never be executed by a thread in these thread pools.
-* **Iteratee thread pool** - This is used by the iteratees library.  Its size can be configured by setting `iteratee-threadpool-size` in `application.conf`.  It defaults to the number of processors available.
 * **Play Internal Thread Pool** - This is used internally by Play.  No application code should ever be executed by a thread in this thread pool, and no blocking should ever be done in this thread pool.  Its size can be configured by setting `internal-threadpool-size` in `application.conf`, and it defaults to the number of available processors.
-* **Play default thread pool** - This is the default thread pool in which all application code in Play Framework is executed, excluding some iteratees code.  It is an Akka dispatcher, and can be configured by configuring Akka, described below.  By default, it has one thread per processor.
+* **Play default thread pool** - This is the default thread pool in which all application code in Play Framework is executed.  It is an Akka dispatcher, and can be configured by configuring Akka, described below.  By default, it has one thread per processor.
 * **Akka thread pool** - This is used by the Play Akka plugin, and can be configured the same way that you would configure Akka.
 
 
@@ -109,6 +108,10 @@ These might then be configured like so:
 
 Then in your code, you would create futures and pass the relevant execution context for the type of work that future was doing.
 
+> **Note:** The configuration namespace can be chosen freely, as long as it matches the dispatcher ID passed to `Akka.system.dispatchers.lookup`.
+
 ### Few specific thread pools
 
 This is a combination between the many specific thread pools and the highly synchronized profile.  You would do most simple IO in the default execution context and set the number of threads there to be reasonably high (say 100), but then dispatch certain expensive operations to specific contexts, where you can limit the number of them that are done at one time.
+
+> **Next:** [[Configuring logging|SettingsLogger]]
